@@ -3,6 +3,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{prelude::*, widgets::*};
 use std::{collections::VecDeque, fs, io, path::PathBuf, time::Duration};
 use ratatui::DefaultTerminal;
+use std::collections::HashMap;
 
 enum Preview {
     Directory(DirColumn),
@@ -12,18 +13,20 @@ enum Preview {
 struct App {
     columns: VecDeque<DirColumn>,
     preview: Option<Preview>,
+    selection_cache: HashMap<PathBuf, usize>,
     should_quit: bool,
 }
 
 impl App {
     fn new() -> io::Result<Self> {
         let path = std::env::current_dir()?;
-        let initial_column = DirColumn::new(path)?;
+        let initial_column = DirColumn::new(path, 0)?;
         let mut columns = VecDeque::new();
         columns.push_back(initial_column);
         let mut app = Self {
             columns,
             preview: None,
+            selection_cache: HashMap::new(),
             should_quit: false,
         };
         app.update_preview()?;
@@ -65,6 +68,7 @@ impl App {
             .selected_entry()
             .map_or(false, |e| e.path().is_dir())
         {
+            self.cache_active_selection();
             if let Some(Preview::Directory(dir_col)) = self.preview.take() {
                 self.columns.push_back(dir_col);
                 self.update_preview()?;
@@ -75,11 +79,12 @@ impl App {
     }
 
     fn on_left(&mut self) -> io::Result<()> {
+        self.cache_active_selection();
         let child_path = self.active_column().path.clone();
         if self.columns.len() > 1 {
             self.columns.pop_back();
         } else if let Some(parent) = self.active_column().path.parent() {
-            let parent_col = DirColumn::new(parent.to_path_buf())?;
+            let parent_col = DirColumn::new(parent.to_path_buf(), 0)?;
             self.columns.pop_back();
             self.columns.push_back(parent_col);
         } else {
@@ -102,24 +107,36 @@ impl App {
     }
 
     fn set_anchor(&mut self) -> io::Result<()> {
+        self.cache_active_selection();
         if let Some(selected_entry) = self.active_column().selected_entry() {
             if selected_entry.path().is_dir() {
                 let new_anchor_path = selected_entry.path();
                 self.columns.clear();
-                self.columns
-                    .push_back(DirColumn::new(new_anchor_path)?);
+                self.columns.push_back(DirColumn::new(new_anchor_path, 0)?);
                 self.update_preview()?;
             }
         }
         Ok(())
     }
 
+    fn cache_active_selection(&mut self) {
+        if let Some(active_col) = self.columns.back() {
+            if let Some(selection) = active_col.selected.selected() {
+                self.selection_cache
+                    .insert(active_col.path.clone(), selection);
+            }
+        }
+    }
+
     fn update_preview(&mut self) -> io::Result<()> {
         self.preview = if let Some(entry) = self.active_column().selected_entry() {
             if entry.path().is_dir() {
-                Some(Preview::Directory(DirColumn::new(entry.path())?))
+                let path = entry.path();
+                let selection = self.selection_cache.get(&path).copied().unwrap_or(0);
+                Some(Preview::Directory(DirColumn::new(path, selection)?))
             } else {
-                let details = fs::read_to_string(entry.path()).unwrap_or_else(|_| "Cannot read file".to_string());
+                let details = fs::read_to_string(entry.path())
+                    .unwrap_or_else(|_| "Cannot read file".to_string());
                 Some(Preview::File(details))
             }
         } else {
@@ -136,10 +153,12 @@ struct DirColumn {
 }
 
 impl DirColumn {
-    fn new(path: PathBuf) -> io::Result<Self> {
+    fn new(path: PathBuf, initial_selection: usize) -> io::Result<Self> {
         let entries = Self::read_dir(&path)?;
         let mut selected = ListState::default();
-        selected.select(Some(0));
+        if !entries.is_empty() {
+            selected.select(Some(initial_selection.min(entries.len() - 1)));
+        }
         Ok(Self {
             path,
             entries,
