@@ -9,10 +9,39 @@ use crossterm::event::KeyModifiers;
 use std::time::Instant;
 use std::io::Read;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 struct Settings {
     show_hidden_files: bool,
+    show_icons: bool,
+    icon_map: HashMap<String, String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        let mut icon_map = HashMap::new();
+        icon_map.insert("rs".to_string(), "🦀".to_string());
+        icon_map.insert("toml".to_string(), "🦀".to_string());
+        icon_map.insert("md".to_string(), "📝".to_string());
+        icon_map.insert("txt".to_string(), "📄".to_string());
+        icon_map.insert("jpg".to_string(), "🖼️".to_string());
+        icon_map.insert("jpeg".to_string(), "🖼️".to_string());
+        icon_map.insert("png".to_string(), "🖼️".to_string());
+        icon_map.insert("gif".to_string(), "🖼️".to_string());
+        icon_map.insert("zip".to_string(), "📦".to_string());
+        icon_map.insert("gz".to_string(), "📦".to_string());
+        icon_map.insert("tar".to_string(), "📦".to_string());
+        icon_map.insert("mp3".to_string(), "🎵".to_string());
+        icon_map.insert("wav".to_string(), "🎵".to_string());
+        icon_map.insert("mp4".to_string(), "🎬".to_string());
+        icon_map.insert("mov".to_string(), "🎬".to_string());
+        Self {
+            show_hidden_files: false,
+            show_icons: true,
+            icon_map,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -37,8 +66,16 @@ impl SettingsTab {
     }
 }
 
+#[derive(PartialEq)]
+enum SettingsFocus {
+    TabList,
+    TabContent,
+}
+
 struct SettingsState {
     active_tab: SettingsTab,
+    display_selection: usize,
+    focus: SettingsFocus,
 }
 
 struct Command {
@@ -107,20 +144,39 @@ impl App {
         }
 
         if let Some(settings_state) = &mut self.settings {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('?') => self.settings = None,
-                KeyCode::Up => settings_state.active_tab = settings_state.active_tab.prev(),
-                KeyCode::Down => settings_state.active_tab = settings_state.active_tab.next(),
-                KeyCode::Char(' ') | KeyCode::Enter => {
-                    if settings_state.active_tab == SettingsTab::Display {
-                        self.config.show_hidden_files = !self.config.show_hidden_files;
-                        self.columns
-                            .iter_mut()
-                            .try_for_each(|c| c.reload(&self.config))?;
-                        self.update_preview()?;
-                    }
-                }
-                _ => {}
+            match settings_state.focus {
+                SettingsFocus::TabList => match key.code {
+                    KeyCode::Esc | KeyCode::Char('?') => self.settings = None,
+                    KeyCode::Up => settings_state.active_tab = settings_state.active_tab.prev(),
+                    KeyCode::Down => settings_state.active_tab = settings_state.active_tab.next(),
+                    KeyCode::Right | KeyCode::Enter => settings_state.focus = SettingsFocus::TabContent,
+                    _ => {}
+                },
+                SettingsFocus::TabContent => match settings_state.active_tab {
+                    SettingsTab::Display => match key.code {
+                        KeyCode::Left | KeyCode::Esc => settings_state.focus = SettingsFocus::TabList,
+                        KeyCode::Up => settings_state.display_selection = settings_state.display_selection.saturating_sub(1),
+                        KeyCode::Down => settings_state.display_selection = (settings_state.display_selection + 1).min(1),
+                        KeyCode::Char(' ') | KeyCode::Enter => {
+                            match settings_state.display_selection {
+                                0 => self.config.show_hidden_files = !self.config.show_hidden_files,
+                                1 => self.config.show_icons = !self.config.show_icons,
+                                _ => {}
+                            }
+                            if settings_state.display_selection == 0 {
+                                self.columns
+                                    .iter_mut()
+                                    .try_for_each(|c| c.reload(&self.config))?;
+                                self.update_preview()?;
+                            }
+                        }
+                        _ => {}
+                    },
+                    SettingsTab::Keybindings => match key.code {
+                        KeyCode::Left | KeyCode::Esc => settings_state.focus = SettingsFocus::TabList,
+                        _ => {}
+                    },
+                },
             }
             return Ok(());
         }
@@ -129,7 +185,13 @@ impl App {
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.should_quit = true;
             }
-            KeyCode::Char('?') => self.settings = Some(SettingsState { active_tab: SettingsTab::Display }),
+            KeyCode::Char('?') => {
+                self.settings = Some(SettingsState {
+                    active_tab: SettingsTab::Display,
+                    display_selection: 0,
+                    focus: SettingsFocus::TabList,
+                })
+            }
             KeyCode::Up => {
                 self.active_column_mut().select_previous();
                 self.update_preview()?;
@@ -398,14 +460,14 @@ fn ui(frame: &mut Frame, app: &mut App) {
     let active_column_index = app.columns.len() - 1;
     for (i, column) in app.columns.iter_mut().enumerate() {
         let is_active = i == active_column_index;
-        render_dir_column(frame, column, layout[i], is_active, false);
+        render_dir_column(frame, column, layout[i], is_active, false, &app.config);
     }
 
     if let Some(preview) = &mut app.preview {
         let preview_area = layout[app.columns.len()];
         match preview {
             Preview::Directory(dir_column) => {
-                render_dir_column(frame, dir_column, preview_area, false, true);
+                render_dir_column(frame, dir_column, preview_area, false, true, &app.config);
             }
             Preview::File(details) => {
                 let chunks = Layout::vertical([Constraint::Max(6), Constraint::Min(0)])
@@ -470,32 +532,57 @@ fn render_settings_panel(frame: &mut Frame, settings_state: &SettingsState, conf
     let mut list_state = ListState::default();
     list_state.select(Some(settings_state.active_tab as usize));
 
+    let list_border_style = if settings_state.focus == SettingsFocus::TabList {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
     let list = List::new(tabs)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title("Settings")
-                .padding(Padding::uniform(1)),
+                .padding(Padding::uniform(1))
+                .border_style(list_border_style),
         )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
+    let content_border_style = if settings_state.focus == SettingsFocus::TabContent {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+
     match settings_state.active_tab {
         SettingsTab::Display => {
-            let checkbox_text = if config.show_hidden_files {
-                "[x] Show hidden files"
-            } else {
-                "[ ] Show hidden files"
-            };
-            let checkbox_widget = Paragraph::new(checkbox_text)
-                .style(Style::default().fg(Color::Cyan))
+            let display_options = vec!["Show hidden files", "Show icons"];
+            let mut list_state = ListState::default();
+            list_state.select(Some(settings_state.display_selection));
+            let items: Vec<ListItem> = display_options
+                .iter()
+                .enumerate()
+                .map(|(i, &name)| {
+                    let checked = match i {
+                        0 => config.show_hidden_files,
+                        1 => config.show_icons,
+                        _ => false,
+                    };
+                    let prefix = if checked { "[x] " } else { "[ ] " };
+                    ListItem::new(format!("{}{}", prefix, name))
+                })
+                .collect();
+
+            let list = List::new(items)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .title("Display")
-                        .padding(Padding::uniform(1)),
-                );
-            frame.render_widget(checkbox_widget, chunks[1]);
+                        .padding(Padding::uniform(1))
+                        .border_style(content_border_style),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            frame.render_stateful_widget(list, chunks[1], &mut list_state);
         }
         SettingsTab::Keybindings => {
             let rows = COMMANDS.iter().map(|cmd| {
@@ -506,7 +593,8 @@ fn render_settings_panel(frame: &mut Frame, settings_state: &SettingsState, conf
                     Block::default()
                         .title("Keybindings")
                         .borders(Borders::ALL)
-                        .padding(Padding::uniform(1)),
+                        .padding(Padding::uniform(1))
+                        .border_style(content_border_style),
                 )
                 .header(
                     Row::new(vec!["Key", "Description"])
@@ -523,6 +611,7 @@ fn render_dir_column(
     area: Rect,
     is_active: bool,
     is_preview: bool,
+    config: &Settings,
 ) {
     let title = column
         .path
@@ -533,8 +622,15 @@ fn render_dir_column(
     let items: Vec<ListItem> = column
         .entries
         .iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(i, entry)| {
             let path = entry.path();
+            let is_selected = Some(i) == column.selected.selected();
+            let icon = if is_active || is_preview {
+                get_icon(&path, is_selected, config)
+            } else {
+                "".to_string()
+            };
             let file_name = path
                 .file_name()
                 .unwrap_or_default()
@@ -545,7 +641,7 @@ fn render_dir_column(
             } else {
                 Style::default()
             };
-            ListItem::new(Span::styled(file_name, style))
+            ListItem::new(Span::styled(format!("{} {}", icon, file_name), style))
         })
         .collect();
 
@@ -571,12 +667,30 @@ fn render_dir_column(
         };
         let list = List::new(items)
             .block(block)
-            .highlight_style(highlight_style)
-            .highlight_symbol(">> ");
+            .highlight_style(highlight_style);
         frame.render_stateful_widget(list, area, &mut column.selected);
     }
 }
 
+fn get_icon(path: &Path, is_selected: bool, config: &Settings) -> String {
+    if !config.show_icons {
+        return "".to_string();
+    }
+    if path.is_dir() {
+        if is_selected {
+            "📂".to_string()
+        } else {
+            "📁".to_string()
+        }
+    } else {
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        config
+            .icon_map
+            .get(extension)
+            .cloned()
+            .unwrap_or("📄".to_string())
+    }
+}
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::vertical([
