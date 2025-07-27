@@ -7,6 +7,26 @@ use ratatui::{
     widgets::*,
 };
 
+// UI Constants for better maintainability
+const BORDER_AND_PADDING_WIDTH: u16 = 4; // 2 for borders + 2 for padding
+const ICON_SPACE_WIDTH: usize = 3; // icon + space + buffer
+const SYMLINK_PREFIX_WIDTH: usize = 16; // "Symlink -> " + padding
+
+/// Calculate available width for content within a bordered area
+fn content_width(area: Rect) -> usize {
+    area.width.saturating_sub(BORDER_AND_PADDING_WIDTH) as usize
+}
+
+/// Calculate available width for filenames, accounting for icons
+fn filename_width(area: Rect, show_icons: bool) -> usize {
+    let width = content_width(area);
+    if show_icons {
+        width.saturating_sub(ICON_SPACE_WIDTH)
+    } else {
+        width
+    }
+}
+
 
 /// Settings panel state
 #[derive(Debug)]
@@ -78,11 +98,22 @@ pub enum SettingsFocus {
 
 /// Main UI rendering function
 pub fn render_ui(frame: &mut Frame, app: &mut App) {
+    let main_layout = Layout::vertical([
+        Constraint::Min(0),      // Main content
+        Constraint::Length(1),   // Status bar
+    ]).split(frame.area());
+
+    render_main_content(frame, app, main_layout[0]);
+    render_status_bar(frame, app, main_layout[1]);
+}
+
+/// Render the main content area (columns and preview)
+fn render_main_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let num_cols = app.columns().len() + if app.preview().is_some() { 1 } else { 0 };
     let constraints = (0..num_cols)
         .map(|_| Constraint::Ratio(1, num_cols as u32))
         .collect::<Vec<_>>();
-    let layout = Layout::horizontal(constraints).split(frame.area());
+    let layout = Layout::horizontal(constraints).split(area);
 
     // Render columns
     let active_column_index = app.columns().len() - 1;
@@ -110,6 +141,37 @@ pub fn render_ui(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Render status bar with helpful information
+fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let current_path = app.columns()
+        .back()
+        .map(|col| col.path.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+    
+    let file_count = app.columns()
+        .back()
+        .map(|col| col.entries.len())
+        .unwrap_or(0);
+    
+    let selected_info = app.columns()
+        .back()
+        .and_then(|col| col.selected.selected())
+        .map(|idx| format!(" ({}/{})", idx + 1, file_count))
+        .unwrap_or_default();
+    
+    let status_text = if !app.search_string().is_empty() {
+        format!("Search: '{}' | {} | {} items{} | Esc to clear | ? for help", 
+                app.search_string(), current_path, file_count, selected_info)
+    } else {
+        format!("{} | {} items{} | ? for help", current_path, file_count, selected_info)
+    };
+    
+    let status_paragraph = Paragraph::new(truncate_text(&status_text, area.width as usize))
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    
+    frame.render_widget(status_paragraph, area);
+}
+
 /// Render a directory column
 fn render_dir_column(
     frame: &mut Frame,
@@ -126,9 +188,7 @@ fn render_dir_column(
         .to_string_lossy()
         .to_string();
     
-    // Calculate available width for the title (subtract borders and padding)
-    let title_width = area.width.saturating_sub(4) as usize;
-    let truncated_title = truncate_text(&title, title_width);
+    let truncated_title = truncate_text(&title, content_width(area));
 
     let border_style = if is_active {
         Style::default().fg(Color::Cyan)
@@ -136,20 +196,14 @@ fn render_dir_column(
         Style::default()
     };
 
-    // Calculate available width for filenames (subtract borders, padding, and icon space)
-    let content_width = area.width.saturating_sub(4) as usize;
-    let filename_width = if config.show_icons {
-        content_width.saturating_sub(3) // Reserve space for icon + space
-    } else {
-        content_width
-    };
-
+    let max_filename_width = filename_width(area, config.show_icons);
+    
     let items: Vec<ListItem> = column
         .entries
         .iter()
         .map(|entry| {
             let name = entry.file_name().to_string_lossy().to_string();
-            let truncated_name = truncate_text(&name, filename_width);
+            let truncated_name = truncate_text(&name, max_filename_width);
             let icon = get_icon(entry, config);
             let display_text = if icon.is_empty() {
                 truncated_name
@@ -188,9 +242,7 @@ fn render_file_preview(frame: &mut Frame, details: &FileDetails, area: Rect) {
         .unwrap_or_default()
         .to_string_lossy();
     
-    // Truncate title to fit in the preview area
-    let title_width = area.width.saturating_sub(4) as usize;
-    let truncated_title = truncate_text(&title, title_width);
+    let truncated_title = truncate_text(&title, content_width(area));
 
     // Metadata section
     let mut lines = vec![Line::from(vec![
@@ -214,8 +266,7 @@ fn render_file_preview(frame: &mut Frame, details: &FileDetails, area: Rect) {
 
     if let Some(target) = &details.symlink_target {
         let target_str = target.to_string_lossy().to_string();
-        // Truncate symlink target to fit (reserve space for "Symlink -> " prefix)
-        let target_width = area.width.saturating_sub(16) as usize; // "Symlink -> " is ~11 chars + padding
+        let target_width = content_width(area).saturating_sub(SYMLINK_PREFIX_WIDTH);
         let truncated_target = truncate_text(&target_str, target_width);
         lines.push(Line::from(vec![
             Span::styled("Symlink -> ", Style::default().add_modifier(Modifier::BOLD)),
@@ -427,11 +478,14 @@ fn render_file_types_settings(
 fn render_keybindings_settings(frame: &mut Frame, area: Rect, border_style: Style) {
     let commands = [
         ("Ctrl+Q", "Quit the application"),
-        ("?", "Show this help window"),
+        ("?", "Show/hide settings panel"),
+        ("Esc", "Clear search string"),
         ("Up/Down", "Navigate list"),
-        ("Left", "Navigate to parent directory"),
-        ("Right", "Enter directory / activate preview"),
+        ("Left/Right", "Navigate directories"),
+        ("Home/End", "Jump to first/last item"),
+        ("PgUp/PgDn", "Jump by 10 items"),
         (".", "Set selected directory as anchor"),
+        ("a-z", "Quick search by typing"),
     ];
 
     let rows = commands.iter().map(|(key, desc)| {

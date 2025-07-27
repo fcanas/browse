@@ -3,6 +3,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+// Configuration constants for better flexibility
+pub const DEFAULT_POLL_INTERVAL_MS: u64 = 100;
+pub const SEARCH_TIMEOUT_SECONDS: u64 = 1;
+pub const MAX_COLUMNS_DISPLAY: usize = 5; // Prevent UI from becoming too cluttered
+
 /// Configuration for file type rules including icon and preview settings
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileTypeRule {

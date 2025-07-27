@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 /// Maximum size for file content preview (4KB)
 const MAX_PREVIEW_SIZE: u64 = 4096;
 
+/// Maximum number of directory entries to display (performance limit)
+const MAX_DIRECTORY_ENTRIES: usize = 1000;
+
 /// File details for preview display
 #[derive(Debug, Clone)]
 pub struct FileDetails {
@@ -93,6 +96,13 @@ pub fn read_directory(path: &Path, config: &Settings) -> io::Result<Vec<DirEntry
         }
     });
     
+    // Limit entries for performance in very large directories
+    if entries.len() > MAX_DIRECTORY_ENTRIES {
+        entries.truncate(MAX_DIRECTORY_ENTRIES);
+        eprintln!("Warning: Directory has more than {} entries, showing first {}", 
+                 MAX_DIRECTORY_ENTRIES, MAX_DIRECTORY_ENTRIES);
+    }
+    
     Ok(entries)
 }
 
@@ -109,53 +119,57 @@ pub fn get_mime_type(path: &Path) -> Option<String> {
 
 /// Get MIME type based on file extension
 fn get_mime_type_from_extension(path: &Path) -> Option<String> {
-    let extension = path.extension()?.to_str()?.to_lowercase();
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
     
-    match extension.as_str() {
+    // Lazy-initialized extension mapping for better performance
+    static EXTENSION_MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    
+    let map = EXTENSION_MAP.get_or_init(|| {
+        let mut map = HashMap::new();
+        
         // Text files
-        "txt" | "log" => Some("text/plain".to_string()),
-        "md" | "markdown" => Some("text/markdown".to_string()),
-        "html" | "htm" => Some("text/html".to_string()),
-        "xml" => Some("application/xml".to_string()),
-        "css" => Some("text/css".to_string()),
-        "csv" => Some("text/csv".to_string()),
+        map.extend([
+            ("txt", "text/plain"), ("log", "text/plain"),
+            ("md", "text/markdown"), ("markdown", "text/markdown"),
+            ("html", "text/html"), ("htm", "text/html"),
+            ("xml", "application/xml"), ("css", "text/css"), ("csv", "text/csv"),
+        ]);
         
         // Programming languages
-        "rs" => Some("text/x-rust".to_string()),
-        "js" | "mjs" => Some("application/javascript".to_string()),
-        "ts" | "mts" => Some("application/typescript".to_string()),
-        "py" | "pyw" => Some("text/x-python".to_string()),
-        "java" => Some("text/x-java".to_string()),
-        "c" | "cc" | "cpp" | "h" | "hpp" => Some("text/x-c".to_string()),
-        "go" => Some("text/x-go".to_string()),
-        "rb" => Some("text/x-ruby".to_string()),
-        "php" => Some("text/x-php".to_string()),
-        "swift" => Some("text/x-swift".to_string()),
-        "kt" | "kts" => Some("text/x-kotlin".to_string()),
-        "cs" => Some("text/x-csharp".to_string()),
-        "pl" => Some("text/x-perl".to_string()),
-        "lua" => Some("text/x-lua".to_string()),
-        "sql" => Some("text/x-sql".to_string()),
+        map.extend([
+            ("rs", "text/x-rust"), ("js", "application/javascript"), ("mjs", "application/javascript"),
+            ("ts", "application/typescript"), ("mts", "application/typescript"),
+            ("py", "text/x-python"), ("pyw", "text/x-python"), ("java", "text/x-java"),
+            ("c", "text/x-c"), ("cc", "text/x-c"), ("cpp", "text/x-c"), ("h", "text/x-c"), ("hpp", "text/x-c"),
+            ("go", "text/x-go"), ("rb", "text/x-ruby"), ("php", "text/x-php"), ("swift", "text/x-swift"),
+            ("kt", "text/x-kotlin"), ("kts", "text/x-kotlin"), ("cs", "text/x-csharp"),
+            ("pl", "text/x-perl"), ("lua", "text/x-lua"), ("sql", "text/x-sql"),
+        ]);
         
         // Configuration files
-        "toml" => Some("application/toml".to_string()),
-        "json" => Some("application/json".to_string()),
-        "yaml" | "yml" => Some("application/x-yaml".to_string()),
-        "sh" | "bash" => Some("application/x-sh".to_string()),
+        map.extend([
+            ("toml", "application/toml"), ("json", "application/json"),
+            ("yaml", "application/x-yaml"), ("yml", "application/x-yaml"),
+            ("sh", "application/x-sh"), ("bash", "application/x-sh"),
+        ]);
         
         // Images
-        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
-        "png" => Some("image/png".to_string()),
-        "gif" => Some("image/gif".to_string()),
-        "svg" => Some("image/svg+xml".to_string()),
+        map.extend([
+            ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("png", "image/png"),
+            ("gif", "image/gif"), ("svg", "image/svg+xml"),
+        ]);
         
         // Archives
-        "zip" => Some("application/zip".to_string()),
-        "gz" => Some("application/gzip".to_string()),
-        "tar" => Some("application/x-tar".to_string()),
+        map.extend([
+            ("zip", "application/zip"), ("gz", "application/gzip"), ("tar", "application/x-tar"),
+        ]);
         
-        _ => None,
-    }
+        map
+    });
+    
+    let extension = path.extension()?.to_str()?.to_lowercase();
+    map.get(extension.as_str()).map(|&mime| mime.to_string())
 }
 
 /// Get the appropriate icon for a file or directory
@@ -209,21 +223,29 @@ fn read_file_preview(path: &Path, mime_type: &Option<String>, config: &Settings)
         return Ok(String::new());
     }
     
-    // Check file size before reading
-    let metadata = fs::metadata(path)?;
-    if metadata.len() > MAX_PREVIEW_SIZE {
-        return Ok(format!("[File too large: {} bytes]", metadata.len()));
-    }
-    
-    // Read file content safely
+    // Read file content safely with size limit (always read first chunk)
     let file = fs::File::open(path)?;
     let mut buffer = Vec::new();
-    file.take(MAX_PREVIEW_SIZE).read_to_end(&mut buffer)?;
+    let _bytes_read = file.take(MAX_PREVIEW_SIZE).read_to_end(&mut buffer)?;
     
-    // Convert to string, handling invalid UTF-8
+    // Check if we read a partial file
+    let metadata = fs::metadata(path)?;
+    let is_truncated = metadata.len() > MAX_PREVIEW_SIZE;
+    
+    // Convert to string, handling invalid UTF-8 gracefully
     match String::from_utf8(buffer) {
-        Ok(content) => Ok(content),
-        Err(_) => Ok("[Binary file - cannot preview]".to_string()),
+        Ok(mut content) => {
+            if is_truncated {
+                let total_size_kb = metadata.len() / 1024;
+                let preview_size_kb = MAX_PREVIEW_SIZE / 1024;
+                content.push_str(&format!(
+                    "\n\n[... File truncated - showing first {} KB of {} KB total ...]", 
+                    preview_size_kb, total_size_kb
+                ));
+            }
+            Ok(content)
+        },
+        Err(_) => Ok("[Binary file - preview not available]".to_string()),
     }
 }
 

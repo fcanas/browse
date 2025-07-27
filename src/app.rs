@@ -1,4 +1,4 @@
-use crate::config::{Settings, load_settings};
+use crate::config::{Settings, load_settings, SEARCH_TIMEOUT_SECONDS, MAX_COLUMNS_DISPLAY};
 use crate::file_operations::{FileDetails, read_directory, is_safe_path};
 use crate::ui::{render_ui, SettingsState, SettingsTab, SettingsFocus, AddFileTypeState};
 use color_eyre::Result;
@@ -168,6 +168,33 @@ impl App {
                 self.open_settings();
                 return Ok(());
             }
+            KeyCode::Esc => {
+                // Clear search string on Escape
+                if !self.search_string.is_empty() {
+                    self.search_string.clear();
+                }
+                return Ok(());
+            }
+            KeyCode::Home => {
+                // Jump to first item
+                if let Some(column) = self.columns.back_mut() {
+                    if !column.entries.is_empty() {
+                        column.selected.select(Some(0));
+                        self.update_preview()?;
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::End => {
+                // Jump to last item
+                if let Some(column) = self.columns.back_mut() {
+                    if !column.entries.is_empty() {
+                        column.selected.select(Some(column.entries.len() - 1));
+                        self.update_preview()?;
+                    }
+                }
+                return Ok(());
+            }
             _ => {}
         }
         
@@ -198,6 +225,26 @@ impl App {
             }
             KeyCode::Char('.') => {
                 self.set_anchor()?;
+            }
+            KeyCode::PageUp => {
+                // Jump up by 10 items
+                if let Some(column) = self.columns.back_mut() {
+                    if let Some(current) = column.selected.selected() {
+                        let new_index = current.saturating_sub(10);
+                        column.selected.select(Some(new_index));
+                        self.update_preview()?;
+                    }
+                }
+            }
+            KeyCode::PageDown => {
+                // Jump down by 10 items
+                if let Some(column) = self.columns.back_mut() {
+                    if let Some(current) = column.selected.selected() {
+                        let new_index = (current + 10).min(column.entries.len().saturating_sub(1));
+                        column.selected.select(Some(new_index));
+                        self.update_preview()?;
+                    }
+                }
             }
             KeyCode::Char(c) => {
                 self.handle_search_char(c)?;
@@ -261,9 +308,23 @@ impl App {
                 }
                 
                 let cached_selection = self.selection_cache.get(&path).copied().unwrap_or(0);
-                let new_column = DirColumn::new(path, cached_selection, &self.config)?;
-                self.columns.push_back(new_column);
-                self.update_preview()?;
+                
+                // Try to create new column, but don't fail the whole operation if it fails
+                match DirColumn::new(path, cached_selection, &self.config) {
+                    Ok(new_column) => {
+                        // Limit the number of columns to prevent UI clutter
+                        if self.columns.len() >= MAX_COLUMNS_DISPLAY {
+                            self.columns.pop_front();
+                        }
+                        
+                        self.columns.push_back(new_column);
+                        self.update_preview()?;
+                    }
+                    Err(_) => {
+                        // Directory couldn't be read (permission denied, etc.)
+                        // Just ignore and stay in current directory
+                    }
+                }
             }
         }
         Ok(())
@@ -288,7 +349,7 @@ impl App {
         let now = Instant::now();
         
         // Reset search string if too much time has passed
-        if now.duration_since(self.last_key_time).as_secs() > 1 {
+        if now.duration_since(self.last_key_time).as_secs() > SEARCH_TIMEOUT_SECONDS {
             self.search_string.clear();
         }
         
@@ -653,5 +714,9 @@ impl App {
     
     pub fn settings(&self) -> &Option<SettingsState> {
         &self.settings
+    }
+    
+    pub fn search_string(&self) -> &str {
+        &self.search_string
     }
 } 

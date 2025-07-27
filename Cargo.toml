@@ -14,4 +14,15 @@ dirs = "5.0"
 infer = "0.15"
 
 [features]
-default = [] 
+default = []
+
+# Optimize for release builds
+[profile.release]
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization
+panic = "abort"      # Smaller binary size
+strip = true         # Remove debug symbols
+
+# Faster debug builds
+[profile.dev]
+opt-level = 1        # Some optimization for better performance during development 

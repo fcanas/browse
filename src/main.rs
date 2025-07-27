@@ -10,7 +10,7 @@ mod ui;
 mod utils;
 
 use app::App;
-use config::save_settings;
+use config::{save_settings, DEFAULT_POLL_INTERVAL_MS};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -29,10 +29,12 @@ fn main() -> Result<()> {
 }
 
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    let poll_duration = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS);
+    
     while !app.should_quit() {
         terminal.draw(|f| app.render(f))?;
         
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(poll_duration)? {
             if let Event::Key(key) = event::read()? {
                 app.handle_key(key)?;
             }
