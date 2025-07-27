@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 enum Preview {
     Directory(DirColumn),
-    File(String),
+    File(PathBuf, String),
 }
 
 struct App {
@@ -135,9 +135,10 @@ impl App {
                 let selection = self.selection_cache.get(&path).copied().unwrap_or(0);
                 Some(Preview::Directory(DirColumn::new(path, selection)?))
             } else {
-                let details = fs::read_to_string(entry.path())
+                let path = entry.path();
+                let details = fs::read_to_string(&path)
                     .unwrap_or_else(|_| "Cannot read file".to_string());
-                Some(Preview::File(details))
+                Some(Preview::File(path, details))
             }
         } else {
             None
@@ -304,9 +305,10 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 );
                 frame.render_widget(list, preview_area);
             }
-            Preview::File(details) => {
+            Preview::File(path, details) => {
+                let title = path.file_name().unwrap_or_default().to_string_lossy();
                 let paragraph = Paragraph::new(details.clone())
-                    .block(Block::default().borders(Borders::ALL).title("File Preview"));
+                    .block(Block::default().borders(Borders::ALL).title(title.to_string()));
                 frame.render_widget(paragraph, preview_area);
             }
         }
