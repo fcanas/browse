@@ -9,39 +9,48 @@ use crossterm::event::KeyModifiers;
 use std::time::Instant;
 use std::io::Read;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+#[derive(Serialize, Deserialize, Clone)]
+struct FileTypeRule {
+    icon: String,
+    preview: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct MimeTypeConfig {
+    primary: HashMap<String, FileTypeRule>,
+    subtypes: HashMap<String, FileTypeRule>,
+}
 
 #[derive(Serialize, Deserialize)]
 struct Settings {
     show_hidden_files: bool,
     show_icons: bool,
-    icon_map: HashMap<String, String>,
+    mime_types: MimeTypeConfig,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        let mut icon_map = HashMap::new();
-        icon_map.insert("rs".to_string(), "🦀".to_string());
-        icon_map.insert("toml".to_string(), "🦀".to_string());
-        icon_map.insert("md".to_string(), "📝".to_string());
-        icon_map.insert("txt".to_string(), "📄".to_string());
-        icon_map.insert("jpg".to_string(), "🖼️".to_string());
-        icon_map.insert("jpeg".to_string(), "🖼️".to_string());
-        icon_map.insert("png".to_string(), "🖼️".to_string());
-        icon_map.insert("gif".to_string(), "🖼️".to_string());
-        icon_map.insert("zip".to_string(), "📦".to_string());
-        icon_map.insert("gz".to_string(), "📦".to_string());
-        icon_map.insert("tar".to_string(), "📦".to_string());
-        icon_map.insert("sh".to_string(), "🚀".to_string());
-        icon_map.insert("mp3".to_string(), "🎵".to_string());
-        icon_map.insert("wav".to_string(), "🎵".to_string());
-        icon_map.insert("mp4".to_string(), "🎬".to_string());
-        icon_map.insert("mov".to_string(), "🎬".to_string());
+        let mut primary = HashMap::new();
+        primary.insert("text".to_string(), FileTypeRule { icon: "📄".to_string(), preview: true });
+        primary.insert("image".to_string(), FileTypeRule { icon: "🖼️".to_string(), preview: false });
+        primary.insert("video".to_string(), FileTypeRule { icon: "🎬".to_string(), preview: false });
+        primary.insert("audio".to_string(), FileTypeRule { icon: "🎵".to_string(), preview: false });
+        primary.insert("application".to_string(), FileTypeRule { icon: "📦".to_string(), preview: false });
+
+        let mut subtypes = HashMap::new();
+        subtypes.insert("text/markdown".to_string(), FileTypeRule { icon: "📝".to_string(), preview: true });
+        subtypes.insert("text/x-rust".to_string(), FileTypeRule { icon: "🦀".to_string(), preview: true });
+        subtypes.insert("application/toml".to_string(), FileTypeRule { icon: "🦀".to_string(), preview: true });
+        subtypes.insert("application/x-sh".to_string(), FileTypeRule { icon: "🚀".to_string(), preview: true });
+        subtypes.insert("symlink".to_string(), FileTypeRule { icon: "🔗".to_string(), preview: false });
+        
         Self {
             show_hidden_files: false,
             show_icons: true,
-            icon_map,
+            mime_types: MimeTypeConfig { primary, subtypes },
         }
     }
 }
@@ -49,13 +58,15 @@ impl Default for Settings {
 #[derive(Clone, Copy, PartialEq)]
 enum SettingsTab {
     Display,
+    FileTypes,
     Keybindings,
 }
 
 impl SettingsTab {
     fn next(self) -> Self {
         match self {
-            Self::Display => Self::Keybindings,
+            Self::Display => Self::FileTypes,
+            Self::FileTypes => Self::Keybindings,
             Self::Keybindings => Self::Display,
         }
     }
@@ -63,7 +74,8 @@ impl SettingsTab {
     fn prev(self) -> Self {
         match self {
             Self::Display => Self::Keybindings,
-            Self::Keybindings => Self::Display,
+            Self::FileTypes => Self::Display,
+            Self::Keybindings => Self::FileTypes,
         }
     }
 }
@@ -72,12 +84,25 @@ impl SettingsTab {
 enum SettingsFocus {
     TabList,
     TabContent,
+    AddFileTypePopup,
+}
+
+struct AddFileTypeState {
+    mime_type: String,
+    icon: String,
+    preview: bool,
+    focused_field: usize,
+    is_editing: Option<String>,
 }
 
 struct SettingsState {
     active_tab: SettingsTab,
     display_selection: usize,
+    file_type_selection: usize,
+    file_type_column_selection: usize,
     focus: SettingsFocus,
+    add_file_type_state: Option<AddFileTypeState>,
+    file_type_table_state: TableState,
 }
 
 struct Command {
@@ -101,6 +126,7 @@ struct FileDetails {
     modified: Option<DateTime<Local>>,
     symlink_target: Option<PathBuf>,
     content_preview: String,
+    mime_type: Option<String>,
 }
 
 enum Preview {
@@ -151,17 +177,30 @@ impl App {
                     KeyCode::Esc | KeyCode::Char('?') => self.settings = None,
                     KeyCode::Up => settings_state.active_tab = settings_state.active_tab.prev(),
                     KeyCode::Down => settings_state.active_tab = settings_state.active_tab.next(),
-                    KeyCode::Right | KeyCode::Enter => settings_state.focus = SettingsFocus::TabContent,
+                    KeyCode::Right | KeyCode::Enter => {
+                        settings_state.focus = SettingsFocus::TabContent
+                    }
                     _ => {}
                 },
                 SettingsFocus::TabContent => match settings_state.active_tab {
                     SettingsTab::Display => match key.code {
-                        KeyCode::Left | KeyCode::Esc => settings_state.focus = SettingsFocus::TabList,
-                        KeyCode::Up => settings_state.display_selection = settings_state.display_selection.saturating_sub(1),
-                        KeyCode::Down => settings_state.display_selection = (settings_state.display_selection + 1).min(1),
+                        KeyCode::Left | KeyCode::Esc => {
+                            settings_state.focus = SettingsFocus::TabList
+                        }
+                        KeyCode::Up => {
+                            settings_state.display_selection =
+                                settings_state.display_selection.saturating_sub(1)
+                        }
+                        KeyCode::Down => {
+                            settings_state.display_selection =
+                                (settings_state.display_selection + 1).min(1)
+                        }
                         KeyCode::Char(' ') | KeyCode::Enter => {
                             match settings_state.display_selection {
-                                0 => self.config.show_hidden_files = !self.config.show_hidden_files,
+                                0 => {
+                                    self.config.show_hidden_files =
+                                        !self.config.show_hidden_files
+                                }
                                 1 => self.config.show_icons = !self.config.show_icons,
                                 _ => {}
                             }
@@ -174,11 +213,248 @@ impl App {
                         }
                         _ => {}
                     },
+                    SettingsTab::FileTypes => {
+                        if let Some(add_state) = &mut settings_state.add_file_type_state {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    settings_state.add_file_type_state = None;
+                                    settings_state.focus = SettingsFocus::TabContent;
+                                }
+                                KeyCode::Tab => {
+                                    add_state.focused_field = (add_state.focused_field + 1) % 3;
+                                }
+                                KeyCode::BackTab => {
+                                    add_state.focused_field =
+                                        (add_state.focused_field + 2) % 3;
+                                }
+                                KeyCode::Char(c) => match add_state.focused_field {
+                                    0 => add_state.mime_type.push(c),
+                                    1 => add_state.icon.push(c),
+                                    _ => {}
+                                },
+                                KeyCode::Backspace => match add_state.focused_field {
+                                    0 if add_state.is_editing.is_none() => {
+                                        add_state.mime_type.pop();
+                                    }
+                                    1 => {
+                                        add_state.icon.pop();
+                                    }
+                                    _ => {}
+                                },
+                                KeyCode::Enter => {
+                                    if add_state.focused_field == 2 {
+                                        add_state.preview = !add_state.preview;
+                                    } else {
+                                        let rule = FileTypeRule {
+                                            icon: add_state.icon.clone(),
+                                            preview: add_state.preview,
+                                        };
+                                        if let Some(original_key) = &add_state.is_editing {
+                                            if original_key.contains('/') {
+                                                self.config.mime_types.subtypes.remove(original_key);
+                                            } else {
+                                                self.config.mime_types.primary.remove(original_key);
+                                            }
+                                        }
+                                        let key = add_state.mime_type.clone();
+                                        if key.contains('/') {
+                                            self.config.mime_types.subtypes.insert(key, rule);
+                                        } else {
+                                            self.config.mime_types.primary.insert(key, rule);
+                                        }
+                                        settings_state.add_file_type_state = None;
+                                        settings_state.focus = SettingsFocus::TabContent;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Left => {
+                                    if settings_state.file_type_column_selection > 0 {
+                                        settings_state.file_type_column_selection -= 1;
+                                    } else {
+                                        settings_state.focus = SettingsFocus::TabList;
+                                    }
+                                }
+                                KeyCode::Right => {
+                                    settings_state.file_type_column_selection =
+                                        (settings_state.file_type_column_selection + 1).min(2);
+                                }
+                                KeyCode::Up => {
+                                    settings_state.file_type_selection =
+                                        settings_state.file_type_selection.saturating_sub(1);
+                                    settings_state
+                                        .file_type_table_state
+                                        .select(Some(settings_state.file_type_selection));
+                                }
+                                KeyCode::Down => {
+                                    let max_len = (self.config.mime_types.primary.len()
+                                        + self.config.mime_types.subtypes.len())
+                                        .saturating_sub(1);
+                                    settings_state.file_type_selection =
+                                        (settings_state.file_type_selection + 1).min(max_len);
+                                    settings_state
+                                        .file_type_table_state
+                                        .select(Some(settings_state.file_type_selection));
+                                }
+                                KeyCode::Char('a') => {
+                                    settings_state.add_file_type_state = Some(AddFileTypeState {
+                                        mime_type: String::new(),
+                                        icon: String::new(),
+                                        preview: false,
+                                        focused_field: 0,
+                                        is_editing: None,
+                                    });
+                                    settings_state.focus = SettingsFocus::AddFileTypePopup;
+                                }
+                                KeyCode::Char('d') => {
+                                    let mut sorted_keys: Vec<_> = self
+                                        .config
+                                        .mime_types
+                                        .primary
+                                        .keys()
+                                        .chain(self.config.mime_types.subtypes.keys())
+                                        .collect();
+                                    sorted_keys.sort();
+
+                                    if let Some(key_to_delete) =
+                                        sorted_keys.get(settings_state.file_type_selection)
+                                    {
+                                        let key_str = key_to_delete.to_string();
+                                        if self.config.mime_types.subtypes.remove(&key_str).is_none()
+                                        {
+                                            self.config.mime_types.primary.remove(&key_str);
+                                        }
+
+                                        let new_max_len = (self.config.mime_types.primary.len()
+                                            + self.config.mime_types.subtypes.len())
+                                            .saturating_sub(1);
+                                        if settings_state.file_type_selection > new_max_len {
+                                            settings_state.file_type_selection = new_max_len;
+                                        }
+                                        settings_state.file_type_table_state.select(Some(
+                                            settings_state.file_type_selection,
+                                        ));
+                                    }
+                                }
+                                KeyCode::Char('e') => {
+                                    let mut sorted_keys: Vec<_> = self
+                                        .config
+                                        .mime_types
+                                        .primary
+                                        .keys()
+                                        .chain(self.config.mime_types.subtypes.keys())
+                                        .collect();
+                                    sorted_keys.sort();
+
+                                    if let Some(key_to_edit) =
+                                        sorted_keys.get(settings_state.file_type_selection)
+                                    {
+                                        if key_to_edit.contains('/') {
+                                            if let Some(rule) = get_rule(&self.config, key_to_edit)
+                                            {
+                                                settings_state.add_file_type_state =
+                                                    Some(AddFileTypeState {
+                                                        mime_type: key_to_edit.to_string(),
+                                                        icon: rule.icon.clone(),
+                                                        preview: rule.preview,
+                                                        focused_field: 0,
+                                                        is_editing: Some(key_to_edit.to_string()),
+                                                    });
+                                                settings_state.focus =
+                                                    SettingsFocus::AddFileTypePopup;
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Char(' ') | KeyCode::Enter => {
+                                    if settings_state.file_type_column_selection == 2 {
+                                        let mut sorted_exts: Vec<_> = self
+                                            .config
+                                            .mime_types
+                                            .primary
+                                            .keys()
+                                            .chain(self.config.mime_types.subtypes.keys())
+                                            .collect();
+                                        sorted_exts.sort();
+
+                                        if let Some(key) =
+                                            sorted_exts.get(settings_state.file_type_selection)
+                                        {
+                                            let key = key.to_string();
+                                            let rule = self
+                                                .config
+                                                .mime_types
+                                                .primary
+                                                .get_mut(&key)
+                                                .or_else(|| {
+                                                    self.config.mime_types.subtypes.get_mut(&key)
+                                                });
+                                            if let Some(rule) = rule {
+                                                rule.preview = !rule.preview;
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     SettingsTab::Keybindings => match key.code {
-                        KeyCode::Left | KeyCode::Esc => settings_state.focus = SettingsFocus::TabList,
+                        KeyCode::Left | KeyCode::Esc => {
+                            settings_state.focus = SettingsFocus::TabList
+                        }
                         _ => {}
                     },
                 },
+                SettingsFocus::AddFileTypePopup => {
+                    if let Some(add_state) = &mut settings_state.add_file_type_state {
+                        match key.code {
+                            KeyCode::Esc => {
+                                settings_state.add_file_type_state = None;
+                                settings_state.focus = SettingsFocus::TabContent;
+                            }
+                            KeyCode::Tab => {
+                                add_state.focused_field = (add_state.focused_field + 1) % 3;
+                            }
+                            KeyCode::BackTab => {
+                                add_state.focused_field = (add_state.focused_field + 2) % 3;
+                            }
+                            KeyCode::Char(c) => match add_state.focused_field {
+                                0 => add_state.mime_type.push(c),
+                                1 => add_state.icon.push(c),
+                                _ => {}
+                            },
+                            KeyCode::Backspace => match add_state.focused_field {
+                                0 => {
+                                    add_state.mime_type.pop();
+                                }
+                                1 => {
+                                    add_state.icon.pop();
+                                }
+                                _ => {}
+                            },
+                            KeyCode::Enter => {
+                                if add_state.focused_field == 2 {
+                                    add_state.preview = !add_state.preview;
+                                } else {
+                                    let rule = FileTypeRule {
+                                        icon: add_state.icon.clone(),
+                                        preview: add_state.preview,
+                                    };
+                                    self.config
+                                        .mime_types
+                                        .subtypes
+                                        .insert(add_state.mime_type.clone(), rule);
+                                    settings_state.add_file_type_state = None;
+                                    settings_state.focus = SettingsFocus::TabContent;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
             return Ok(());
         }
@@ -191,7 +467,11 @@ impl App {
                 self.settings = Some(SettingsState {
                     active_tab: SettingsTab::Display,
                     display_selection: 0,
+                    file_type_selection: 0,
+                    file_type_column_selection: 0,
                     focus: SettingsFocus::TabList,
+                    add_file_type_state: None,
+                    file_type_table_state: TableState::default(),
                 })
             }
             KeyCode::Up => {
@@ -311,7 +591,11 @@ impl App {
             if entry.path().is_dir() {
                 let path = entry.path();
                 let selection = self.selection_cache.get(&path).copied().unwrap_or(0);
-                Some(Preview::Directory(DirColumn::new(path, selection, &self.config)?))
+                Some(Preview::Directory(DirColumn::new(
+                    path,
+                    selection,
+                    &self.config,
+                )?))
             } else {
                 let path = entry.path();
                 let metadata = fs::symlink_metadata(&path)?;
@@ -324,21 +608,33 @@ impl App {
                     None
                 };
 
-                let content_preview = if metadata.is_file() {
-                    match fs::File::open(&path) {
-                        Ok(file) => {
-                            let mut buffer = String::new();
-                            if file.take(4096).read_to_string(&mut buffer).is_ok() {
-                                buffer
-                            } else {
-                                "[Content not valid UTF-8]".to_string()
+                let mut mime_type = None;
+                let mut content_preview = "[Not a regular file]".to_string();
+
+                if metadata.is_file() {
+                    mime_type = get_mime_type(&path);
+
+                    let can_preview = mime_type
+                        .as_ref()
+                        .and_then(|mime_str| get_rule(&self.config, mime_str))
+                        .map_or(false, |rule| rule.preview);
+
+                    content_preview = if can_preview {
+                        match fs::File::open(&path) {
+                            Ok(file) => {
+                                let mut buffer = String::new();
+                                if file.take(4096).read_to_string(&mut buffer).is_ok() {
+                                    buffer
+                                } else {
+                                    "[Content not valid UTF-8]".to_string()
+                                }
                             }
+                            Err(_) => "[Could not open file]".to_string(),
                         }
-                        Err(_) => "[Could not open file]".to_string(),
-                    }
-                } else {
-                    "[Not a regular file]".to_string()
-                };
+                    } else {
+                        "[Preview not available for this file type]".to_string()
+                    };
+                }
 
                 let details = FileDetails {
                     path: path.clone(),
@@ -347,6 +643,7 @@ impl App {
                     modified,
                     symlink_target,
                     content_preview,
+                    mime_type: mime_type.map(|t| t.to_string()),
                 };
                 Some(Preview::File(details))
             }
@@ -472,7 +769,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
                 render_dir_column(frame, dir_column, preview_area, false, true, &app.config);
             }
             Preview::File(details) => {
-                let chunks = Layout::vertical([Constraint::Max(6), Constraint::Min(0)])
+                let chunks = Layout::vertical([Constraint::Max(8), Constraint::Min(0)])
                     .split(preview_area);
                 let title = details
                     .path
@@ -501,6 +798,10 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         Span::raw(target.to_string_lossy().to_string()),
                     ]));
                 }
+                lines.push(Line::from(vec![
+                    Span::styled("MIME Type: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(details.mime_type.as_deref().unwrap_or("unknown")),
+                ]));
 
                 let metadata_widget = Paragraph::new(lines).block(
                     Block::default()
@@ -518,19 +819,19 @@ fn ui(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    if let Some(settings) = &app.settings {
+    if let Some(settings) = &mut app.settings {
         render_settings_panel(frame, settings, &app.config);
     }
 }
 
-fn render_settings_panel(frame: &mut Frame, settings_state: &SettingsState, config: &Settings) {
+fn render_settings_panel(frame: &mut Frame, settings_state: &mut SettingsState, config: &Settings) {
     let area = centered_rect(60, 50, frame.area());
     frame.render_widget(Clear, area);
 
     let chunks = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(area);
 
-    let tabs = vec!["Display", "Keybindings"];
+    let tabs = vec!["Display", "File Types", "Keybindings"];
     let mut list_state = ListState::default();
     list_state.select(Some(settings_state.active_tab as usize));
 
@@ -586,6 +887,95 @@ fn render_settings_panel(frame: &mut Frame, settings_state: &SettingsState, conf
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
             frame.render_stateful_widget(list, chunks[1], &mut list_state);
         }
+        SettingsTab::FileTypes => {
+            let file_types_chunks =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(chunks[1]);
+
+            let mut sorted_exts: Vec<_> = config
+                .mime_types
+                .primary
+                .keys()
+                .chain(config.mime_types.subtypes.keys())
+                .collect();
+            sorted_exts.sort();
+
+            let rows = sorted_exts.iter().enumerate().map(|(row_index, ext)| {
+                let rule = if let Some(rule) = config.mime_types.primary.get(*ext) {
+                    rule
+                } else {
+                    config.mime_types.subtypes.get(*ext).unwrap()
+                };
+                let is_selected_row = row_index == settings_state.file_type_selection
+                    && settings_state.focus == SettingsFocus::TabContent;
+
+                let row_style = if is_selected_row {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+
+                let cells_data = [
+                    ext.to_string(),
+                    rule.icon.clone(),
+                    if rule.preview {
+                        "✅".to_string()
+                    } else {
+                        "❌".to_string()
+                    },
+                ];
+
+                let cells: Vec<Cell> = cells_data
+                    .into_iter()
+                    .enumerate()
+                    .map(|(col_index, data)| {
+                        let is_selected_cell = is_selected_row
+                            && col_index == settings_state.file_type_column_selection;
+                        let style = if is_selected_cell {
+                            Style::default().add_modifier(Modifier::REVERSED)
+                        } else {
+                            row_style
+                        };
+                        Cell::from(data).style(style)
+                    })
+                    .collect();
+
+                Row::new(cells)
+            });
+
+            let table = Table::new(
+                rows,
+                [
+                    Constraint::Length(20),
+                    Constraint::Length(4),
+                    Constraint::Length(8),
+                ],
+            )
+            .header(
+                Row::new(vec!["Mime Type", "Icon", "Preview"])
+                    .style(Style::new().add_modifier(Modifier::BOLD)),
+            )
+            .block(
+                Block::default()
+                    .title("File Type Handling")
+                    .borders(Borders::ALL)
+                    .padding(Padding::uniform(1))
+                    .border_style(content_border_style),
+            )
+            .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        frame.render_stateful_widget(
+            table,
+            file_types_chunks[0],
+            &mut settings_state.file_type_table_state,
+        );
+
+        let footer =
+            Paragraph::new("[A]dd, [D]elete, [E]dit").alignment(Alignment::Center);
+        frame.render_widget(footer, file_types_chunks[1]);
+
+        if let Some(add_state) = &settings_state.add_file_type_state {
+            render_add_file_type_popup(frame, add_state);
+        }
+    }
         SettingsTab::Keybindings => {
             let rows = COMMANDS.iter().map(|cmd| {
                 Row::new(vec![Cell::from(cmd.key), Cell::from(cmd.description)])
@@ -629,7 +1019,7 @@ fn render_dir_column(
             let path = entry.path();
             let is_selected = Some(i) == column.selected.selected();
             let icon = if is_active || is_preview {
-                get_icon(&path, is_selected, config)
+                get_icon(entry, is_selected, config)
             } else {
                 "".to_string()
             };
@@ -674,30 +1064,158 @@ fn render_dir_column(
     }
 }
 
-fn get_icon(path: &Path, is_selected: bool, config: &Settings) -> String {
+fn render_add_file_type_popup(frame: &mut Frame, state: &AddFileTypeState) {
+    let area = centered_rect(60, 40, frame.area());
+    frame.render_widget(Clear, area);
+    let title = if state.is_editing.is_some() {
+        "Edit File Type"
+    } else {
+        "Add New File Type"
+    };
+    let popup_block = Block::default().title(title).borders(Borders::ALL);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(1),
+    ])
+    .margin(1)
+    .split(popup_block.inner(area));
+    frame.render_widget(popup_block, area);
+
+    let mime_input = Paragraph::new(state.mime_type.as_str()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("MIME Type")
+            .border_style(if state.focused_field == 0 {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            }),
+    );
+    frame.render_widget(mime_input, chunks[0]);
+
+    let icon_input = Paragraph::new(state.icon.as_str()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Icon")
+            .border_style(if state.focused_field == 1 {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            }),
+    );
+    frame.render_widget(icon_input, chunks[1]);
+
+    let checkbox_text = if state.preview { "[x] Preview" } else { "[ ] Preview" };
+    let checkbox = Paragraph::new(checkbox_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Preview")
+            .border_style(if state.focused_field == 2 {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            }),
+    );
+    frame.render_widget(checkbox, chunks[2]);
+}
+
+fn get_icon(entry: &fs::DirEntry, is_selected: bool, config: &Settings) -> String {
     if !config.show_icons {
         return "".to_string();
     }
-    if path.is_dir() {
-        if is_selected {
-            "📂".to_string()
-        } else {
-            "📁".to_string()
+
+    if let Ok(file_type) = entry.file_type() {
+        if file_type.is_dir() {
+            return if is_selected { "📂" } else { "📁" }.to_string();
         }
-    } else {
-        #[cfg(unix)]
-        if let Ok(metadata) = path.metadata() {
-            if metadata.permissions().mode() & 0o111 != 0 {
-                return "🚀".to_string();
-            }
+        if file_type.is_symlink() {
+            return config
+                .mime_types
+                .subtypes
+                .get("symlink")
+                .map(|r| r.icon.clone())
+                .unwrap_or("🔗".to_string());
         }
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        config
-            .icon_map
-            .get(extension)
-            .cloned()
-            .unwrap_or("📄".to_string())
+        if !file_type.is_file() {
+            return "❓".to_string();
+        }
     }
+
+    let path = entry.path();
+    #[cfg(unix)]
+    if let Ok(metadata) = entry.metadata() {
+        if metadata.permissions().mode() & 0o111 != 0 {
+            return "🚀".to_string();
+        }
+    }
+
+    if let Some(mime_type) = get_mime_type(&path) {
+        if let Some(rule) = get_rule(config, &mime_type) {
+            return rule.icon.clone();
+        }
+    }
+    "📄".to_string()
+}
+
+fn get_mime_type(path: &Path) -> Option<String> {
+    if let Some(kind) = infer::get_from_path(path).ok().flatten() {
+        return Some(kind.mime_type().to_string());
+    }
+
+    // Fallback to extension
+    let extension = path.extension()?.to_str()?.to_lowercase();
+    match extension.as_str() {
+        "txt" | "log" => Some("text/plain".to_string()),
+        "md" => Some("text/markdown".to_string()),
+        "rs" => Some("text/x-rust".to_string()),
+        "toml" => Some("application/toml".to_string()),
+        "json" => Some("application/json".to_string()),
+        "yaml" | "yml" => Some("application/x-yaml".to_string()),
+        "html" | "htm" => Some("text/html".to_string()),
+        "xml" => Some("application/xml".to_string()),
+        "svg" => Some("image/svg+xml".to_string()),
+        "ics" => Some("text/calendar".to_string()),
+        "css" => Some("text/css".to_string()),
+        "csv" => Some("text/csv".to_string()),
+        "js" | "mjs" => Some("application/javascript".to_string()),
+        "ts" | "mts" => Some("application/typescript".to_string()),
+        "py" | "pyw" => Some("text/x-python".to_string()),
+        "sh" | "bash" => Some("application/x-sh".to_string()),
+        "jpg" | "jpeg" => Some("image/jpeg".to_string()),
+        "png" => Some("image/png".to_string()),
+        "gif" => Some("image/gif".to_string()),
+        "zip" => Some("application/zip".to_string()),
+        "gz" => Some("application/gzip".to_string()),
+        "c" | "cc" | "cpp" | "h" | "hpp" | "hh" | "hxx" | "cxx" => Some("text/x-c".to_string()),
+        "java" => Some("text/x-java".to_string()),
+        "php" => Some("text/x-php".to_string()),
+        "rb" => Some("text/x-ruby".to_string()),
+        "swift" => Some("text/x-swift".to_string()),
+        "go" => Some("text/x-go".to_string()),
+        "dart" => Some("text/x-dart".to_string()),
+        "m" | "mm" | "mxx" => Some("text/x-objectivec".to_string()),
+        "cs" => Some("text/x-csharp".to_string()),
+        "pl" => Some("text/x-perl".to_string()),
+        "lua" => Some("text/x-lua".to_string()),
+        "sql" => Some("text/x-sql".to_string()),
+        "kt" | "kts" => Some("text/x-kotlin".to_string()),
+        _ => None,
+    }
+}
+
+fn get_rule<'a>(config: &'a Settings, mime_type: &str) -> Option<&'a FileTypeRule> {
+    if let Some(rule) = config.mime_types.subtypes.get(mime_type) {
+        return Some(rule);
+    }
+    if let Some(primary_type) = mime_type.split('/').next() {
+        if let Some(rule) = config.mime_types.primary.get(primary_type) {
+            return Some(rule);
+        }
+    }
+    None
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
