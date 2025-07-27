@@ -5,6 +5,7 @@ use std::{collections::VecDeque, fs, io, path::PathBuf, time::Duration};
 use ratatui::DefaultTerminal;
 use std::collections::HashMap;
 use crossterm::event::KeyModifiers;
+use std::time::Instant;
 
 struct Command {
     key: &'static str,
@@ -30,6 +31,8 @@ struct App {
     preview: Option<Preview>,
     selection_cache: HashMap<PathBuf, usize>,
     show_help: bool,
+    search_string: String,
+    last_key_time: Instant,
     should_quit: bool,
 }
 
@@ -44,6 +47,8 @@ impl App {
             preview: None,
             selection_cache: HashMap::new(),
             show_help: false,
+            search_string: String::new(),
+            last_key_time: Instant::now(),
             should_quit: false,
         };
         app.update_preview()?;
@@ -79,6 +84,27 @@ impl App {
             KeyCode::Right => self.on_right()?,
             KeyCode::Left => self.on_left()?,
             KeyCode::Char('.') => self.set_anchor()?,
+            KeyCode::Char(c) if key.modifiers.is_empty() => {
+                let now = Instant::now();
+                if now.duration_since(self.last_key_time) > Duration::from_secs(1) {
+                    self.search_string.clear();
+                }
+                self.search_string.push(c);
+                self.last_key_time = now;
+
+                let search_string = self.search_string.to_lowercase();
+                if let Some(col) = self.columns.back_mut() {
+                    if let Some(pos) = col.entries.iter().position(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .starts_with(&search_string)
+                    }) {
+                        col.selected.select(Some(pos));
+                    }
+                }
+                self.update_preview()?;
+            }
             _ => {}
         }
         Ok(())
