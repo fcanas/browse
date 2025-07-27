@@ -10,6 +10,7 @@ use std::time::Instant;
 use std::io::Read;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Serialize, Deserialize)]
 struct Settings {
@@ -32,6 +33,7 @@ impl Default for Settings {
         icon_map.insert("zip".to_string(), "📦".to_string());
         icon_map.insert("gz".to_string(), "📦".to_string());
         icon_map.insert("tar".to_string(), "📦".to_string());
+        icon_map.insert("sh".to_string(), "🚀".to_string());
         icon_map.insert("mp3".to_string(), "🎵".to_string());
         icon_map.insert("wav".to_string(), "🎵".to_string());
         icon_map.insert("mp4".to_string(), "🎬".to_string());
@@ -683,6 +685,12 @@ fn get_icon(path: &Path, is_selected: bool, config: &Settings) -> String {
             "📁".to_string()
         }
     } else {
+        #[cfg(unix)]
+        if let Ok(metadata) = path.metadata() {
+            if metadata.permissions().mode() & 0o111 != 0 {
+                return "🚀".to_string();
+            }
+        }
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         config
             .icon_map
