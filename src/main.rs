@@ -8,6 +8,38 @@ use std::collections::HashMap;
 use crossterm::event::KeyModifiers;
 use std::time::Instant;
 use std::io::Read;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Default)]
+struct Settings {
+    show_hidden_files: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SettingsTab {
+    Display,
+    Keybindings,
+}
+
+impl SettingsTab {
+    fn next(self) -> Self {
+        match self {
+            Self::Display => Self::Keybindings,
+            Self::Keybindings => Self::Display,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Display => Self::Keybindings,
+            Self::Keybindings => Self::Display,
+        }
+    }
+}
+
+struct SettingsState {
+    active_tab: SettingsTab,
+}
 
 struct Command {
     key: &'static str,
@@ -41,7 +73,8 @@ struct App {
     columns: VecDeque<DirColumn>,
     preview: Option<Preview>,
     selection_cache: HashMap<PathBuf, usize>,
-    show_help: bool,
+    settings: Option<SettingsState>,
+    config: Settings,
     search_string: String,
     last_key_time: Instant,
     should_quit: bool,
@@ -50,14 +83,16 @@ struct App {
 impl App {
     fn new() -> io::Result<Self> {
         let path = std::env::current_dir()?;
-        let initial_column = DirColumn::new(path, 0)?;
+        let config = load_settings().unwrap_or_default();
+        let initial_column = DirColumn::new(path, 0, &config)?;
         let mut columns = VecDeque::new();
         columns.push_back(initial_column);
         let mut app = Self {
             columns,
             preview: None,
             selection_cache: HashMap::new(),
-            show_help: false,
+            settings: None,
+            config,
             search_string: String::new(),
             last_key_time: Instant::now(),
             should_quit: false,
@@ -71,9 +106,20 @@ impl App {
             return Ok(());
         }
 
-        if self.show_help {
+        if let Some(settings_state) = &mut self.settings {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('?') => self.show_help = false,
+                KeyCode::Esc | KeyCode::Char('?') => self.settings = None,
+                KeyCode::Up => settings_state.active_tab = settings_state.active_tab.prev(),
+                KeyCode::Down => settings_state.active_tab = settings_state.active_tab.next(),
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    if settings_state.active_tab == SettingsTab::Display {
+                        self.config.show_hidden_files = !self.config.show_hidden_files;
+                        self.columns
+                            .iter_mut()
+                            .try_for_each(|c| c.reload(&self.config))?;
+                        self.update_preview()?;
+                    }
+                }
                 _ => {}
             }
             return Ok(());
@@ -83,7 +129,7 @@ impl App {
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.should_quit = true;
             }
-            KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Char('?') => self.settings = Some(SettingsState { active_tab: SettingsTab::Display }),
             KeyCode::Up => {
                 self.active_column_mut().select_previous();
                 self.update_preview()?;
@@ -151,7 +197,7 @@ impl App {
         if self.columns.len() > 1 {
             self.columns.pop_back();
         } else if let Some(parent) = self.active_column().path.parent() {
-            let parent_col = DirColumn::new(parent.to_path_buf(), 0)?;
+            let parent_col = DirColumn::new(parent.to_path_buf(), 0, &self.config)?;
             self.columns.pop_back();
             self.columns.push_back(parent_col);
         } else {
@@ -179,7 +225,8 @@ impl App {
             if selected_entry.path().is_dir() {
                 let new_anchor_path = selected_entry.path();
                 self.columns.clear();
-                self.columns.push_back(DirColumn::new(new_anchor_path, 0)?);
+                self.columns
+                    .push_back(DirColumn::new(new_anchor_path, 0, &self.config)?);
                 self.update_preview()?;
             }
         }
@@ -200,7 +247,7 @@ impl App {
             if entry.path().is_dir() {
                 let path = entry.path();
                 let selection = self.selection_cache.get(&path).copied().unwrap_or(0);
-                Some(Preview::Directory(DirColumn::new(path, selection)?))
+                Some(Preview::Directory(DirColumn::new(path, selection, &self.config)?))
             } else {
                 let path = entry.path();
                 let metadata = fs::symlink_metadata(&path)?;
@@ -253,8 +300,8 @@ struct DirColumn {
 }
 
 impl DirColumn {
-    fn new(path: PathBuf, initial_selection: usize) -> io::Result<Self> {
-        let entries = Self::read_dir(&path)?;
+    fn new(path: PathBuf, initial_selection: usize, config: &Settings) -> io::Result<Self> {
+        let entries = Self::read_dir(&path, config)?;
         let mut selected = ListState::default();
         if !entries.is_empty() {
             selected.select(Some(initial_selection.min(entries.len() - 1)));
@@ -266,10 +313,24 @@ impl DirColumn {
         })
     }
 
-    fn read_dir(path: &PathBuf) -> io::Result<Vec<fs::DirEntry>> {
-        let mut entries: Vec<_> = fs::read_dir(path)?.filter_map(Result::ok).collect();
+    fn read_dir(path: &PathBuf, config: &Settings) -> io::Result<Vec<fs::DirEntry>> {
+        let mut entries: Vec<_> = fs::read_dir(path)?
+            .filter_map(Result::ok)
+            .filter(|e| {
+                config.show_hidden_files
+                    || !e.file_name().to_string_lossy().starts_with('.')
+            })
+            .collect();
         entries.sort_by_key(|e| e.path());
         Ok(entries)
+    }
+
+    fn reload(&mut self, config: &Settings) -> io::Result<()> {
+        self.entries = Self::read_dir(&self.path, config)?;
+        if self.selected.selected().map_or(0, |i| i) >= self.entries.len() {
+            self.selected.select(Some(self.entries.len().saturating_sub(1)));
+        }
+        Ok(())
     }
 
     fn selected_entry(&self) -> Option<&fs::DirEntry> {
@@ -310,6 +371,7 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let mut app = App::new()?;
     run(&mut terminal, &mut app)?;
+    save_settings(&app.config)?;
     ratatui::restore();
     Ok(())
 }
@@ -392,20 +454,66 @@ fn ui(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    if app.show_help {
-        let area = centered_rect(60, 50, frame.area());
-        frame.render_widget(Clear, area); //this clears the background
-        let rows = COMMANDS.iter().map(|cmd| {
-            Row::new(vec![Cell::from(cmd.key), Cell::from(cmd.description)])
-        });
+    if let Some(settings) = &app.settings {
+        render_settings_panel(frame, settings, &app.config);
+    }
+}
 
-        let table = Table::new(rows, [Constraint::Percentage(30), Constraint::Percentage(70)])
-            .block(Block::default().title("Keybindings").borders(Borders::ALL))
-            .header(
-                Row::new(vec!["Key", "Description"])
-                    .style(Style::new().add_modifier(Modifier::BOLD)),
-            );
-        frame.render_widget(table, area);
+fn render_settings_panel(frame: &mut Frame, settings_state: &SettingsState, config: &Settings) {
+    let area = centered_rect(60, 50, frame.area());
+    frame.render_widget(Clear, area);
+
+    let chunks = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(area);
+
+    let tabs = vec!["Display", "Keybindings"];
+    let mut list_state = ListState::default();
+    list_state.select(Some(settings_state.active_tab as usize));
+
+    let list = List::new(tabs)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Settings")
+                .padding(Padding::uniform(1)),
+        )
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
+
+    match settings_state.active_tab {
+        SettingsTab::Display => {
+            let checkbox_text = if config.show_hidden_files {
+                "[x] Show hidden files"
+            } else {
+                "[ ] Show hidden files"
+            };
+            let checkbox_widget = Paragraph::new(checkbox_text)
+                .style(Style::default().fg(Color::Cyan))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Display")
+                        .padding(Padding::uniform(1)),
+                );
+            frame.render_widget(checkbox_widget, chunks[1]);
+        }
+        SettingsTab::Keybindings => {
+            let rows = COMMANDS.iter().map(|cmd| {
+                Row::new(vec![Cell::from(cmd.key), Cell::from(cmd.description)])
+            });
+            let table = Table::new(rows, [Constraint::Percentage(30), Constraint::Percentage(70)])
+                .block(
+                    Block::default()
+                        .title("Keybindings")
+                        .borders(Borders::ALL)
+                        .padding(Padding::uniform(1)),
+                )
+                .header(
+                    Row::new(vec!["Key", "Description"])
+                        .style(Style::new().add_modifier(Modifier::BOLD)),
+                );
+            frame.render_widget(table, chunks[1]);
+        }
     }
 }
 
@@ -484,4 +592,22 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(popup_layout[1])[1]
+}
+
+fn settings_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".browse")
+}
+
+fn load_settings() -> io::Result<Settings> {
+    let path = settings_path();
+    let file = fs::File::open(path)?;
+    serde_json::from_reader(file).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+}
+
+fn save_settings(settings: &Settings) -> io::Result<()> {
+    let path = settings_path();
+    let file = fs::File::create(path)?;
+    serde_json::to_writer_pretty(file, settings).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
 } 
