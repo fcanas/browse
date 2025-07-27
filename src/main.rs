@@ -3,9 +3,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{prelude::*, widgets::*};
 use std::{collections::VecDeque, fs, io, path::PathBuf, time::Duration};
 use ratatui::DefaultTerminal;
+use chrono::{DateTime, Local};
 use std::collections::HashMap;
 use crossterm::event::KeyModifiers;
 use std::time::Instant;
+use std::io::Read;
 
 struct Command {
     key: &'static str,
@@ -21,9 +23,18 @@ const COMMANDS: &[Command] = &[
     Command { key: ".", description: "Set selected directory as anchor" },
 ];
 
+struct FileDetails {
+    path: PathBuf,
+    size: u64,
+    created: Option<DateTime<Local>>,
+    modified: Option<DateTime<Local>>,
+    symlink_target: Option<PathBuf>,
+    content_preview: String,
+}
+
 enum Preview {
     Directory(DirColumn),
-    File(PathBuf, String),
+    File(FileDetails),
 }
 
 struct App {
@@ -192,9 +203,41 @@ impl App {
                 Some(Preview::Directory(DirColumn::new(path, selection)?))
             } else {
                 let path = entry.path();
-                let details = fs::read_to_string(&path)
-                    .unwrap_or_else(|_| "Cannot read file".to_string());
-                Some(Preview::File(path, details))
+                let metadata = fs::symlink_metadata(&path)?;
+                let created = metadata.created().ok().map(DateTime::from);
+                let modified = metadata.modified().ok().map(DateTime::from);
+
+                let symlink_target = if metadata.file_type().is_symlink() {
+                    fs::read_link(&path).ok()
+                } else {
+                    None
+                };
+
+                let content_preview = if metadata.is_file() {
+                    match fs::File::open(&path) {
+                        Ok(file) => {
+                            let mut buffer = String::new();
+                            if file.take(4096).read_to_string(&mut buffer).is_ok() {
+                                buffer
+                            } else {
+                                "[Content not valid UTF-8]".to_string()
+                            }
+                        }
+                        Err(_) => "[Could not open file]".to_string(),
+                    }
+                } else {
+                    "[Not a regular file]".to_string()
+                };
+
+                let details = FileDetails {
+                    path: path.clone(),
+                    size: metadata.len(),
+                    created,
+                    modified,
+                    symlink_target,
+                    content_preview,
+                };
+                Some(Preview::File(details))
             }
         } else {
             None
@@ -302,11 +345,49 @@ fn ui(frame: &mut Frame, app: &mut App) {
             Preview::Directory(dir_column) => {
                 render_dir_column(frame, dir_column, preview_area, false, true);
             }
-            Preview::File(path, details) => {
-                let title = path.file_name().unwrap_or_default().to_string_lossy();
-                let paragraph = Paragraph::new(details.clone())
-                    .block(Block::default().borders(Borders::ALL).title(title.to_string()));
-                frame.render_widget(paragraph, preview_area);
+            Preview::File(details) => {
+                let chunks = Layout::vertical([Constraint::Max(6), Constraint::Min(0)])
+                    .split(preview_area);
+                let title = details
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let mut lines = vec![Line::from(vec![
+                    Span::styled("Size: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(format!("{} bytes", details.size)),
+                ])];
+                if let Some(created) = details.created {
+                    lines.push(Line::from(vec![
+                        Span::styled("Created: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(created.format("%Y-%m-%d %H:%M:%S").to_string()),
+                    ]));
+                }
+                if let Some(modified) = details.modified {
+                    lines.push(Line::from(vec![
+                        Span::styled("Modified: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(modified.format("%Y-%m-%d %H:%M:%S").to_string()),
+                    ]));
+                }
+                if let Some(target) = &details.symlink_target {
+                    lines.push(Line::from(vec![
+                        Span::styled("Symlink -> ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(target.to_string_lossy().to_string()),
+                    ]));
+                }
+
+                let metadata_widget = Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(title.to_string())
+                        .padding(Padding::uniform(1)),
+                );
+
+                let content_widget = Paragraph::new(details.content_preview.clone())
+                    .block(Block::default().borders(Borders::ALL));
+
+                frame.render_widget(metadata_widget, chunks[0]);
+                frame.render_widget(content_widget, chunks[1]);
             }
         }
     }
