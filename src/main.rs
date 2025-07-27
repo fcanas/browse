@@ -4,8 +4,14 @@ use ratatui::{prelude::*, widgets::*};
 use std::{collections::VecDeque, fs, io, path::PathBuf, time::Duration};
 use ratatui::DefaultTerminal;
 
+enum Preview {
+    Directory(DirColumn),
+    File(String),
+}
+
 struct App {
     columns: VecDeque<DirColumn>,
+    preview: Option<Preview>,
     should_quit: bool,
 }
 
@@ -15,17 +21,27 @@ impl App {
         let initial_column = DirColumn::new(path)?;
         let mut columns = VecDeque::new();
         columns.push_back(initial_column);
-        Ok(Self {
+        let mut app = Self {
             columns,
+            preview: None,
             should_quit: false,
-        })
+        };
+        app.update_preview()?;
+        Ok(app)
     }
+
     fn on_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         if key.kind == KeyEventKind::Press {
             match key.code {
                 KeyCode::Char('q') => self.should_quit = true,
-                KeyCode::Up => self.active_column_mut().select_previous(),
-                KeyCode::Down => self.active_column_mut().select_next(),
+                KeyCode::Up => {
+                    self.active_column_mut().select_previous();
+                    self.update_preview()?;
+                }
+                KeyCode::Down => {
+                    self.active_column_mut().select_next();
+                    self.update_preview()?;
+                }
                 KeyCode::Right => self.on_right()?,
                 KeyCode::Left => self.on_left()?,
                 KeyCode::Char('.') => self.set_anchor()?,
@@ -44,12 +60,17 @@ impl App {
     }
 
     fn on_right(&mut self) -> io::Result<()> {
-        if let Some(selected_entry) = self.active_column().selected_entry() {
-            if selected_entry.path().is_dir() {
-                self.columns
-                    .push_back(DirColumn::new(selected_entry.path())?);
+        if self
+            .active_column()
+            .selected_entry()
+            .map_or(false, |e| e.path().is_dir())
+        {
+            if let Some(Preview::Directory(dir_col)) = self.preview.take() {
+                self.columns.push_back(dir_col);
+                self.update_preview()?;
             }
         }
+        // If the selected item is a file, do nothing.
         Ok(())
     }
 
@@ -62,6 +83,7 @@ impl App {
                 self.columns.push_front(parent_col);
             }
         }
+        self.update_preview()?;
         Ok(())
     }
 
@@ -72,8 +94,23 @@ impl App {
                 self.columns.clear();
                 self.columns
                     .push_back(DirColumn::new(new_anchor_path)?);
+                self.update_preview()?;
             }
         }
+        Ok(())
+    }
+
+    fn update_preview(&mut self) -> io::Result<()> {
+        self.preview = if let Some(entry) = self.active_column().selected_entry() {
+            if entry.path().is_dir() {
+                Some(Preview::Directory(DirColumn::new(entry.path())?))
+            } else {
+                let details = fs::read_to_string(entry.path()).unwrap_or_else(|_| "Cannot read file".to_string());
+                Some(Preview::File(details))
+            }
+        } else {
+            None
+        };
         Ok(())
     }
 }
@@ -157,10 +194,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 }
 
 fn ui(frame: &mut Frame, app: &mut App) {
-    let constraints = app
-        .columns
-        .iter()
-        .map(|_| Constraint::Ratio(1, app.columns.len() as u32))
+    let num_cols = app.columns.len() + if app.preview.is_some() { 1 } else { 0 };
+    let constraints = (0..num_cols)
+        .map(|_| Constraint::Ratio(1, num_cols as u32))
         .collect::<Vec<_>>();
     let layout = Layout::horizontal(constraints).split(frame.area());
 
@@ -190,5 +226,42 @@ fn ui(frame: &mut Frame, app: &mut App) {
             .highlight_symbol(">> ");
 
         frame.render_stateful_widget(list, layout[i], &mut column.selected);
+    }
+
+    if let Some(preview) = &mut app.preview {
+        let preview_area = layout[app.columns.len()];
+        match preview {
+            Preview::Directory(dir_column) => {
+                let items: Vec<ListItem> = dir_column
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        let path = entry.path();
+                        let file_name =
+                            path.file_name().unwrap_or_default().to_string_lossy();
+                        let style = if path.is_dir() {
+                            Style::default().fg(Color::Cyan)
+                        } else {
+                            Style::default()
+                        };
+                        ListItem::new(Span::styled(file_name.to_string(), style))
+                    })
+                    .collect();
+                let list = List::new(items)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(dir_column.path.to_string_lossy().to_string()),
+                    )
+                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+                    .highlight_symbol(">> ");
+                frame.render_stateful_widget(list, preview_area, &mut dir_column.selected);
+            }
+            Preview::File(details) => {
+                let paragraph = Paragraph::new(details.clone())
+                    .block(Block::default().borders(Borders::ALL).title("File Preview"));
+                frame.render_widget(paragraph, preview_area);
+            }
+        }
     }
 } 
