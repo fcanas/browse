@@ -267,73 +267,14 @@ fn ui(frame: &mut Frame, app: &mut App) {
     let active_column_index = app.columns.len() - 1;
     for (i, column) in app.columns.iter_mut().enumerate() {
         let is_active = i == active_column_index;
-        let items: Vec<ListItem> = column
-            .entries
-            .iter()
-            .map(|entry| {
-                let path = entry.path();
-                let file_name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let style = if path.is_dir() {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(Span::styled(file_name, style))
-            })
-            .collect();
-
-        let highlight_style = if is_active {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default().bg(Color::DarkGray)
-        };
-
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(if is_active {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    })
-                    .title(column.path.to_string_lossy().to_string()),
-            )
-            .highlight_style(highlight_style)
-            .highlight_symbol(">> ");
-
-        frame.render_stateful_widget(list, layout[i], &mut column.selected);
+        render_dir_column(frame, column, layout[i], is_active, false);
     }
 
     if let Some(preview) = &mut app.preview {
         let preview_area = layout[app.columns.len()];
         match preview {
             Preview::Directory(dir_column) => {
-                let items: Vec<ListItem> = dir_column
-                    .entries
-                    .iter()
-                    .map(|entry| {
-                        let path = entry.path();
-                        let file_name =
-                            path.file_name().unwrap_or_default().to_string_lossy();
-                        let style = if path.is_dir() {
-                            Style::default().fg(Color::Cyan)
-                        } else {
-                            Style::default()
-                        };
-                        ListItem::new(Span::styled(file_name.to_string(), style))
-                    })
-                    .collect();
-                let list = List::new(items).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(dir_column.path.to_string_lossy().to_string()),
-                );
-                frame.render_widget(list, preview_area);
+                render_dir_column(frame, dir_column, preview_area, false, true);
             }
             Preview::File(path, details) => {
                 let title = path.file_name().unwrap_or_default().to_string_lossy();
@@ -348,10 +289,7 @@ fn ui(frame: &mut Frame, app: &mut App) {
         let area = centered_rect(60, 50, frame.area());
         frame.render_widget(Clear, area); //this clears the background
         let rows = COMMANDS.iter().map(|cmd| {
-            Row::new(vec![
-                Cell::from(cmd.key),
-                Cell::from(cmd.description),
-            ])
+            Row::new(vec![Cell::from(cmd.key), Cell::from(cmd.description)])
         });
 
         let table = Table::new(rows, [Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -363,6 +301,67 @@ fn ui(frame: &mut Frame, app: &mut App) {
         frame.render_widget(table, area);
     }
 }
+
+fn render_dir_column(
+    frame: &mut Frame,
+    column: &mut DirColumn,
+    area: Rect,
+    is_active: bool,
+    is_preview: bool,
+) {
+    let title = column
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+
+    let items: Vec<ListItem> = column
+        .entries
+        .iter()
+        .map(|entry| {
+            let path = entry.path();
+            let file_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let style = if path.is_dir() {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Span::styled(file_name, style))
+        })
+        .collect();
+
+    let border_style = if is_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(title.to_string());
+
+    if is_preview {
+        let list = List::new(items).block(block);
+        frame.render_widget(list, area);
+    } else {
+        let highlight_style = if is_active {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().bg(Color::DarkGray)
+        };
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(highlight_style)
+            .highlight_symbol(">> ");
+        frame.render_stateful_widget(list, area, &mut column.selected);
+    }
+}
+
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::vertical([
