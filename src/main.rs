@@ -1,29 +1,20 @@
 use color_eyre::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{prelude::*, widgets::*};
-use std::{fs, io, path::PathBuf, time::Duration};
+use std::{collections::VecDeque, fs, io, path::PathBuf, time::Duration};
 use ratatui::DefaultTerminal;
 
 struct App {
-    columns: Vec<DirColumn>,
+    columns: VecDeque<DirColumn>,
     should_quit: bool,
 }
 
 impl App {
     fn new() -> io::Result<Self> {
-        let mut columns = vec![];
-        let mut current_path = std::env::current_dir()?;
-        let mut paths_to_create = vec![current_path.clone()];
-
-        while let Some(parent) = current_path.parent() {
-            paths_to_create.push(parent.to_path_buf());
-            current_path = parent.to_path_buf();
-        }
-
-        for path in paths_to_create.into_iter().rev() {
-            columns.push(DirColumn::new(path)?);
-        }
-
+        let path = std::env::current_dir()?;
+        let initial_column = DirColumn::new(path)?;
+        let mut columns = VecDeque::new();
+        columns.push_back(initial_column);
         Ok(Self {
             columns,
             should_quit: false,
@@ -35,8 +26,9 @@ impl App {
                 KeyCode::Char('q') => self.should_quit = true,
                 KeyCode::Up => self.active_column_mut().select_previous(),
                 KeyCode::Down => self.active_column_mut().select_next(),
-                KeyCode::Right => self.enter_dir()?,
-                KeyCode::Left => self.leave_dir()?,
+                KeyCode::Right => self.on_right()?,
+                KeyCode::Left => self.on_left()?,
+                KeyCode::Char('.') => self.set_anchor()?,
                 _ => {}
             }
         }
@@ -44,25 +36,43 @@ impl App {
     }
 
     fn active_column(&self) -> &DirColumn {
-        self.columns.last().unwrap()
+        self.columns.back().unwrap()
     }
 
     fn active_column_mut(&mut self) -> &mut DirColumn {
-        self.columns.last_mut().unwrap()
+        self.columns.back_mut().unwrap()
     }
 
-    fn enter_dir(&mut self) -> io::Result<()> {
+    fn on_right(&mut self) -> io::Result<()> {
         if let Some(selected_entry) = self.active_column().selected_entry() {
             if selected_entry.path().is_dir() {
-                self.columns.push(DirColumn::new(selected_entry.path())?);
+                self.columns
+                    .push_back(DirColumn::new(selected_entry.path())?);
             }
         }
         Ok(())
     }
 
-    fn leave_dir(&mut self) -> io::Result<()> {
+    fn on_left(&mut self) -> io::Result<()> {
         if self.columns.len() > 1 {
-            self.columns.pop();
+            self.columns.pop_back();
+        } else if let Some(first_col) = self.columns.front() {
+            if let Some(parent) = first_col.path.parent() {
+                let parent_col = DirColumn::new(parent.to_path_buf())?;
+                self.columns.push_front(parent_col);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_anchor(&mut self) -> io::Result<()> {
+        if let Some(selected_entry) = self.active_column().selected_entry() {
+            if selected_entry.path().is_dir() {
+                let new_anchor_path = selected_entry.path();
+                self.columns.clear();
+                self.columns
+                    .push_back(DirColumn::new(new_anchor_path)?);
+            }
         }
         Ok(())
     }
@@ -147,7 +157,11 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 }
 
 fn ui(frame: &mut Frame, app: &mut App) {
-    let constraints = app.columns.iter().map(|_| Constraint::Ratio(1, app.columns.len() as u32)).collect::<Vec<_>>();
+    let constraints = app
+        .columns
+        .iter()
+        .map(|_| Constraint::Ratio(1, app.columns.len() as u32))
+        .collect::<Vec<_>>();
     let layout = Layout::horizontal(constraints).split(frame.area());
 
     for (i, column) in app.columns.iter_mut().enumerate() {
