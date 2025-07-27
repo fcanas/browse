@@ -75,14 +75,28 @@ impl App {
     }
 
     fn on_left(&mut self) -> io::Result<()> {
+        let child_path = self.active_column().path.clone();
         if self.columns.len() > 1 {
             self.columns.pop_back();
-        } else if let Some(first_col) = self.columns.front() {
-            if let Some(parent) = first_col.path.parent() {
-                let parent_col = DirColumn::new(parent.to_path_buf())?;
-                self.columns.push_front(parent_col);
+        } else if let Some(parent) = self.active_column().path.parent() {
+            let parent_col = DirColumn::new(parent.to_path_buf())?;
+            self.columns.pop_back();
+            self.columns.push_back(parent_col);
+        } else {
+            // at root, do nothing
+            return Ok(());
+        }
+
+        if let Some(active_col) = self.columns.back_mut() {
+            if let Some(idx) = active_col
+                .entries
+                .iter()
+                .position(|e| e.path() == child_path)
+            {
+                active_col.selected.select(Some(idx));
             }
         }
+
         self.update_preview()?;
         Ok(())
     }
@@ -247,15 +261,12 @@ fn ui(frame: &mut Frame, app: &mut App) {
                         ListItem::new(Span::styled(file_name.to_string(), style))
                     })
                     .collect();
-                let list = List::new(items)
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(dir_column.path.to_string_lossy().to_string()),
-                    )
-                    .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-                    .highlight_symbol(">> ");
-                frame.render_stateful_widget(list, preview_area, &mut dir_column.selected);
+                let list = List::new(items).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(dir_column.path.to_string_lossy().to_string()),
+                );
+                frame.render_widget(list, preview_area);
             }
             Preview::File(details) => {
                 let paragraph = Paragraph::new(details.clone())
