@@ -233,13 +233,19 @@ fn ui(frame: &mut Frame, app: &mut App) {
         .collect::<Vec<_>>();
     let layout = Layout::horizontal(constraints).split(frame.area());
 
+    let active_column_index = app.columns.len() - 1;
     for (i, column) in app.columns.iter_mut().enumerate() {
+        let is_active = i == active_column_index;
         let items: Vec<ListItem> = column
             .entries
             .iter()
             .map(|entry| {
                 let path = entry.path();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let file_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let style = if path.is_dir() {
                     Style::default().fg(Color::Cyan)
                 } else {
@@ -249,13 +255,24 @@ fn ui(frame: &mut Frame, app: &mut App) {
             })
             .collect();
 
+        let highlight_style = if is_active {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().bg(Color::DarkGray)
+        };
+
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_style(if is_active {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default()
+                    })
                     .title(column.path.to_string_lossy().to_string()),
             )
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .highlight_style(highlight_style)
             .highlight_symbol(">> ");
 
         frame.render_stateful_widget(list, layout[i], &mut column.selected);
