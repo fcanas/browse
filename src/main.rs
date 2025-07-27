@@ -4,6 +4,21 @@ use ratatui::{prelude::*, widgets::*};
 use std::{collections::VecDeque, fs, io, path::PathBuf, time::Duration};
 use ratatui::DefaultTerminal;
 use std::collections::HashMap;
+use crossterm::event::KeyModifiers;
+
+struct Command {
+    key: &'static str,
+    description: &'static str,
+}
+
+const COMMANDS: &[Command] = &[
+    Command { key: "Ctrl+Q", description: "Quit the application" },
+    Command { key: "?", description: "Show this help window" },
+    Command { key: "Up/Down", description: "Navigate list" },
+    Command { key: "Left", description: "Navigate to parent directory" },
+    Command { key: "Right", description: "Enter directory / activate preview" },
+    Command { key: ".", description: "Set selected directory as anchor" },
+];
 
 enum Preview {
     Directory(DirColumn),
@@ -14,6 +29,7 @@ struct App {
     columns: VecDeque<DirColumn>,
     preview: Option<Preview>,
     selection_cache: HashMap<PathBuf, usize>,
+    show_help: bool,
     should_quit: bool,
 }
 
@@ -27,6 +43,7 @@ impl App {
             columns,
             preview: None,
             selection_cache: HashMap::new(),
+            show_help: false,
             should_quit: false,
         };
         app.update_preview()?;
@@ -34,22 +51,35 @@ impl App {
     }
 
     fn on_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
-        if key.kind == KeyEventKind::Press {
+        if key.kind != KeyEventKind::Press {
+            return Ok(());
+        }
+
+        if self.show_help {
             match key.code {
-                KeyCode::Char('q') => self.should_quit = true,
-                KeyCode::Up => {
-                    self.active_column_mut().select_previous();
-                    self.update_preview()?;
-                }
-                KeyCode::Down => {
-                    self.active_column_mut().select_next();
-                    self.update_preview()?;
-                }
-                KeyCode::Right => self.on_right()?,
-                KeyCode::Left => self.on_left()?,
-                KeyCode::Char('.') => self.set_anchor()?,
+                KeyCode::Esc | KeyCode::Char('?') => self.show_help = false,
                 _ => {}
             }
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                self.should_quit = true;
+            }
+            KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Up => {
+                self.active_column_mut().select_previous();
+                self.update_preview()?;
+            }
+            KeyCode::Down => {
+                self.active_column_mut().select_next();
+                self.update_preview()?;
+            }
+            KeyCode::Right => self.on_right()?,
+            KeyCode::Left => self.on_left()?,
+            KeyCode::Char('.') => self.set_anchor()?,
+            _ => {}
         }
         Ok(())
     }
@@ -313,4 +343,39 @@ fn ui(frame: &mut Frame, app: &mut App) {
             }
         }
     }
+
+    if app.show_help {
+        let area = centered_rect(60, 50, frame.area());
+        frame.render_widget(Clear, area); //this clears the background
+        let rows = COMMANDS.iter().map(|cmd| {
+            Row::new(vec![
+                Cell::from(cmd.key),
+                Cell::from(cmd.description),
+            ])
+        });
+
+        let table = Table::new(rows, [Constraint::Percentage(30), Constraint::Percentage(70)])
+            .block(Block::default().title("Keybindings").borders(Borders::ALL))
+            .header(
+                Row::new(vec!["Key", "Description"])
+                    .style(Style::new().add_modifier(Modifier::BOLD)),
+            );
+        frame.render_widget(table, area);
+    }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(r);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(popup_layout[1])[1]
 } 
