@@ -1,8 +1,9 @@
+use crate::commands::{CommandRegistry, CommandAction};
 use crate::config::{Settings, load_settings, SEARCH_TIMEOUT_SECONDS, MAX_COLUMNS_DISPLAY};
 use crate::file_operations::{FileDetails, read_directory, is_safe_path};
 use crate::ui::{render_ui, SettingsState, SettingsTab, SettingsFocus, AddFileTypeState};
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{Frame, widgets::ListState};
 use std::collections::{HashMap, VecDeque};
 use std::fs::DirEntry;
@@ -100,6 +101,7 @@ pub struct App {
     search_string: String,
     last_key_time: Instant,
     should_quit: bool,
+    command_registry: CommandRegistry,
 }
 
 impl App {
@@ -126,6 +128,7 @@ impl App {
             search_string: String::new(),
             last_key_time: Instant::now(),
             should_quit: false,
+            command_registry: CommandRegistry::new(),
         };
         
         app.update_preview()?;
@@ -140,6 +143,11 @@ impl App {
     /// Get reference to the current configuration
     pub fn config(&self) -> &Settings {
         &self.config
+    }
+    
+    /// Get reference to the command registry
+    pub fn command_registry(&self) -> &CommandRegistry {
+        &self.command_registry
     }
     
     /// Render the application UI
@@ -158,76 +166,64 @@ impl App {
             return self.handle_settings_key(key);
         }
         
-        // Handle global shortcuts
-        match key.code {
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        // Find matching command
+        if let Some(command) = self.command_registry.find_command(&key) {
+            let action = command.action.clone();
+            return self.execute_command(&action, key);
+        }
+        
+        Ok(())
+    }
+    
+    /// Execute a command action
+    fn execute_command(&mut self, action: &CommandAction, key: KeyEvent) -> Result<()> {
+        match action {
+            CommandAction::Quit => {
                 self.should_quit = true;
-                return Ok(());
             }
-            KeyCode::Char('?') => {
+            CommandAction::ShowSettings => {
                 self.open_settings();
-                return Ok(());
             }
-            KeyCode::Esc => {
-                // Clear search string on Escape
+            CommandAction::ClearSearch => {
                 if !self.search_string.is_empty() {
                     self.search_string.clear();
                 }
-                return Ok(());
             }
-            KeyCode::Home => {
-                // Jump to first item
+            CommandAction::NavigateUp => {
+                if let Some(column) = self.columns.back_mut() {
+                    column.select_previous();
+                    self.update_preview()?;
+                }
+            }
+            CommandAction::NavigateDown => {
+                if let Some(column) = self.columns.back_mut() {
+                    column.select_next();
+                    self.update_preview()?;
+                }
+            }
+            CommandAction::NavigateLeft => {
+                self.navigate_left()?;
+            }
+            CommandAction::NavigateRight => {
+                self.navigate_right()?;
+            }
+            CommandAction::JumpToFirst => {
                 if let Some(column) = self.columns.back_mut() {
                     if !column.entries.is_empty() {
                         column.selected.select(Some(0));
                         self.update_preview()?;
                     }
                 }
-                return Ok(());
             }
-            KeyCode::End => {
-                // Jump to last item
+            CommandAction::JumpToLast => {
                 if let Some(column) = self.columns.back_mut() {
                     if !column.entries.is_empty() {
                         column.selected.select(Some(column.entries.len() - 1));
                         self.update_preview()?;
                     }
                 }
-                return Ok(());
             }
-            _ => {}
-        }
-        
-        // Handle navigation
-        self.handle_navigation_key(key)
-    }
-    
-    /// Handle navigation keys
-    fn handle_navigation_key(&mut self, key: KeyEvent) -> Result<()> {
-        match key.code {
-            KeyCode::Up => {
-                if let Some(column) = self.columns.back_mut() {
-                    column.select_previous();
-                    self.update_preview()?;
-                }
-            }
-            KeyCode::Down => {
-                if let Some(column) = self.columns.back_mut() {
-                    column.select_next();
-                    self.update_preview()?;
-                }
-            }
-            KeyCode::Left => {
-                self.navigate_left()?;
-            }
-            KeyCode::Right => {
-                self.navigate_right()?;
-            }
-            KeyCode::Char('.') => {
-                self.set_anchor()?;
-            }
-            KeyCode::PageUp => {
-                // Jump up by 10 items
+            CommandAction::JumpUpBy10 => {
                 if let Some(column) = self.columns.back_mut() {
                     if let Some(current) = column.selected.selected() {
                         let new_index = current.saturating_sub(10);
@@ -236,8 +232,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::PageDown => {
-                // Jump down by 10 items
+            CommandAction::JumpDownBy10 => {
                 if let Some(column) = self.columns.back_mut() {
                     if let Some(current) = column.selected.selected() {
                         let new_index = (current + 10).min(column.entries.len().saturating_sub(1));
@@ -246,13 +241,19 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char(c) => {
-                self.handle_search_char(c)?;
+            CommandAction::SetAnchor => {
+                self.set_anchor()?;
             }
-            _ => {}
+            CommandAction::SearchChar => {
+                if let KeyCode::Char(c) = key.code {
+                    self.handle_search_char(c)?;
+                }
+            }
         }
         Ok(())
     }
+    
+
     
     /// Navigate left (parent directory)
     fn navigate_left(&mut self) -> Result<()> {

@@ -4,6 +4,7 @@ use ratatui::DefaultTerminal;
 use std::time::Duration;
 
 mod app;
+mod commands;
 mod config;
 mod file_operations;
 mod ui;

@@ -160,10 +160,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default();
     
     let status_text = if !app.search_string().is_empty() {
-        format!("Search: '{}' | {} | {} items{} | Esc to clear | ? for help", 
+        format!("Search: '{}' | {} | {} items{} | Esc to clear | ? for settings & help", 
                 app.search_string(), current_path, file_count, selected_info)
     } else {
-        format!("{} | {} items{} | ? for help", current_path, file_count, selected_info)
+        format!("{} | {} items{} | ? for settings & help", current_path, file_count, selected_info)
     };
     
     let status_paragraph = Paragraph::new(truncate_text(&status_text, area.width as usize))
@@ -347,7 +347,7 @@ fn render_settings_panel(frame: &mut Frame, app: &mut App) {
             render_file_types_settings(frame, chunks[1], settings_state, config, content_border_style);
         }
         SettingsTab::Keybindings => {
-            render_keybindings_settings(frame, chunks[1], content_border_style);
+            render_keybindings_settings(frame, chunks[1], content_border_style, app);
         }
     }
 
@@ -475,21 +475,11 @@ fn render_file_types_settings(
 }
 
 /// Render keybindings settings tab
-fn render_keybindings_settings(frame: &mut Frame, area: Rect, border_style: Style) {
-    let commands = [
-        ("Ctrl+Q", "Quit the application"),
-        ("?", "Show/hide settings panel"),
-        ("Esc", "Clear search string"),
-        ("Up/Down", "Navigate list"),
-        ("Left/Right", "Navigate directories"),
-        ("Home/End", "Jump to first/last item"),
-        ("PgUp/PgDn", "Jump by 10 items"),
-        (".", "Set selected directory as anchor"),
-        ("a-z", "Quick search by typing"),
-    ];
+fn render_keybindings_settings(frame: &mut Frame, area: Rect, border_style: Style, app: &App) {
+    let commands = app.command_registry().get_display_commands();
 
     let rows = commands.iter().map(|(key, desc)| {
-        Row::new(vec![Cell::from(*key), Cell::from(*desc)])
+        Row::new(vec![Cell::from(key.clone()), Cell::from(*desc)])
     });
 
     let table = Table::new(rows, [Constraint::Percentage(30), Constraint::Percentage(70)])
