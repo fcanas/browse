@@ -7,6 +7,7 @@ mod app;
 mod browser;
 mod commands;
 mod config;
+mod error;
 mod file_operations;
 mod file_preview;
 mod settings;

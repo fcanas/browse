@@ -2,8 +2,9 @@ use crate::app::{App, Preview};
 use crate::config::{Settings, SEARCH_TIMEOUT_SECONDS, MAX_COLUMNS_DISPLAY};
 use crate::settings::render_settings_panel;
 use crate::utils::{truncate_text};
-use crate::file_operations::{get_icon, read_directory, is_safe_path, FileDetails};
+use crate::file_operations::{get_icon_with_error_log, read_directory_with_error_log, is_safe_path, FileDetails};
 use crate::file_preview::render_file_preview;
+use crate::error::ErrorLog;
 use color_eyre::Result;
 use std::collections::{HashMap, VecDeque};
 use std::fs::DirEntry;
@@ -28,14 +29,23 @@ pub struct DirColumn {
 impl DirColumn {
     /// Create a new directory column
     pub fn new(path: PathBuf, initial_selection: usize, config: &Settings) -> io::Result<Self> {
+        Self::new_with_error_log(path, initial_selection, config, None)
+    }
+
+    /// Create a new directory column with error logging
+    pub fn new_with_error_log(path: PathBuf, initial_selection: usize, config: &Settings, error_log: Option<&mut ErrorLog>) -> io::Result<Self> {
         if !is_safe_path(&path) {
+            let error_msg = format!("Path not allowed for security reasons: {}", path.display());
+            if let Some(log) = error_log {
+                log.error(error_msg.clone(), Some("Security Check".to_string()));
+            }
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "Path not allowed for security reasons",
+                error_msg,
             ));
         }
 
-        let entries = read_directory(&path, config)?;
+        let entries = read_directory_with_error_log(&path, config, error_log)?;
         let mut selected = ListState::default();
 
         if !entries.is_empty() {
@@ -51,7 +61,12 @@ impl DirColumn {
 
     /// Reload the directory contents
     pub fn reload(&mut self, config: &Settings) -> io::Result<()> {
-        self.entries = read_directory(&self.path, config)?;
+        self.reload_with_error_log(config, None)
+    }
+
+    /// Reload the directory contents with error logging
+    pub fn reload_with_error_log(&mut self, config: &Settings, error_log: Option<&mut ErrorLog>) -> io::Result<()> {
+        self.entries = read_directory_with_error_log(&self.path, config, error_log)?;
 
         // Adjust selection if it's out of bounds
         if let Some(current_selection) = self.selected.selected() {
@@ -101,9 +116,10 @@ pub struct Browser {
 }
 
 impl Browser {
-    /// Create a new browser starting from the given directory
-    pub fn new(initial_dir: PathBuf, config: &Settings) -> Result<Self> {
-        let initial_column = DirColumn::new(initial_dir, 0, config)
+
+    /// Create a new browser with error logging
+    pub fn new_with_error_log(initial_dir: PathBuf, config: &Settings, error_log: Option<&mut ErrorLog>) -> Result<Self> {
+        let initial_column = DirColumn::new_with_error_log(initial_dir, 0, config, error_log)
             .map_err(|e| color_eyre::eyre::eyre!("Failed to read initial directory: {}", e))?;
 
         let mut columns = VecDeque::new();
@@ -439,7 +455,7 @@ fn render_dir_column(
         .map(|entry| {
             let name = entry.file_name().to_string_lossy().to_string();
             let truncated_name = truncate_text(&name, max_filename_width);
-            let icon = get_icon(entry, config);
+            let icon = get_icon_with_error_log(entry, config, None);
             let display_text = if icon.is_empty() {
                 truncated_name
             } else {

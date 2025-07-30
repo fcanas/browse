@@ -1,5 +1,6 @@
 use crate::app::{App};
 use crate::browser::{render_browser};
+use crate::error::render_error_log;
 use crate::utils::{truncate_text};
 
 use ratatui::{
@@ -9,13 +10,32 @@ use ratatui::{
 
 /// Main UI rendering function
 pub fn render_ui(frame: &mut Frame, app: &mut App) {
-    let main_layout = Layout::vertical([
-        Constraint::Min(0),      // Main content
-        Constraint::Length(1),   // Status bar
-    ]).split(frame.area());
+    // Create layout based on whether error log is visible
+    let main_layout = if app.error_log().is_visible() {
+        Layout::vertical([
+            Constraint::Min(0),      // Browser content
+            Constraint::Length(8),   // Error log panel (8 lines)
+            Constraint::Length(1),   // Status bar
+        ]).split(frame.area())
+    } else {
+        Layout::vertical([
+            Constraint::Min(0),      // Browser content
+            Constraint::Length(1),   // Status bar
+        ]).split(frame.area())
+    };
 
+    // Render browser in the top area
     render_browser(frame, app, main_layout[0]);
-    render_status_bar(frame, app, main_layout[1]);
+
+    if app.error_log().is_visible() {
+        // Render error log in the middle area
+        render_error_log(frame, app.error_log(), main_layout[1]);
+        // Render status bar in the bottom area
+        render_status_bar(frame, app, main_layout[2]);
+    } else {
+        // Render status bar in the bottom area
+        render_status_bar(frame, app, main_layout[1]);
+    }
 }
 
 
@@ -37,11 +57,30 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         .map(|idx| format!(" ({}/{})", idx + 1, file_count))
         .unwrap_or_default();
 
-    let status_text = if !app.browser().search_string().is_empty() {
-        format!("Search: '{}' | {} | {} items{} | Esc to clear | ? for settings & help",
-                app.browser().search_string(), current_path, file_count, selected_info)
+    // Create error count display
+    let error_count = app.error_log().unread_count();
+    let error_indicator = if error_count > 0 {
+        if app.error_log().has_errors() {
+            format!(" | ❌ {} errors", error_count)
+        } else {
+            format!(" | ⚠️ {} warnings", error_count)
+        }
     } else {
-        format!("{} | {} items{} | ? for settings & help", current_path, file_count, selected_info)
+        String::new()
+    };
+
+    let error_help = if app.error_log().is_visible() {
+        " | Enter to expand, Esc to hide"
+    } else {
+        " | Ctrl+E for errors"
+    };
+
+    let status_text = if !app.browser().search_string().is_empty() {
+        format!("Search: '{}' | {} | {} items{} | Esc to clear | ? for settings{}{}",
+                app.browser().search_string(), current_path, file_count, selected_info, error_help, error_indicator)
+    } else {
+        format!("{} | {} items{} | ? for settings{}{}",
+                current_path, file_count, selected_info, error_help, error_indicator)
     };
 
     let status_paragraph = Paragraph::new(truncate_text(&status_text, area.width as usize))

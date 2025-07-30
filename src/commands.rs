@@ -24,7 +24,7 @@ impl KeyBinding {
             }
         }
     }
-    
+
     /// Get the display text for this key binding
     pub fn display_text(&self) -> String {
         match self {
@@ -45,17 +45,17 @@ impl KeyBinding {
             _ => "Unknown".to_string(),
         }
     }
-    
+
     /// Convenience method to create a Ctrl+key binding
     pub fn ctrl(c: char) -> Self {
         KeyBinding::ModifiedKey(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
-    
+
     /// Convenience method to create a simple key binding
     pub fn key(code: KeyCode) -> Self {
         KeyBinding::Key(code)
     }
-    
+
     /// Convenience method to create a character key binding
     pub fn char(c: char) -> Self {
         KeyBinding::Key(KeyCode::Char(c))
@@ -76,7 +76,7 @@ pub enum CommandAction {
     ShowSettings,
     ClearSearch,
     NavigateUp,
-    NavigateDown, 
+    NavigateDown,
     NavigateLeft,
     NavigateRight,
     JumpToFirst,
@@ -85,6 +85,7 @@ pub enum CommandAction {
     JumpDownBy10,
     SetAnchor,
     SearchChar,
+    ShowErrorLog,
 }
 
 impl Command {
@@ -111,6 +112,11 @@ impl CommandRegistry {
                 CommandAction::Quit,
             ),
             Command::new(
+                KeyBinding::ctrl('e'),
+                "Show/hide error log",
+                CommandAction::ShowErrorLog,
+            ),
+            Command::new(
                 KeyBinding::char('?'),
                 "Show/hide settings panel",
                 CommandAction::ShowSettings,
@@ -127,7 +133,7 @@ impl CommandRegistry {
             ),
             Command::new(
                 KeyBinding::key(KeyCode::Down),
-                "Navigate down", 
+                "Navigate down",
                 CommandAction::NavigateDown,
             ),
             Command::new(
@@ -147,7 +153,7 @@ impl CommandRegistry {
             ),
             Command::new(
                 KeyBinding::key(KeyCode::End),
-                "Jump to last item", 
+                "Jump to last item",
                 CommandAction::JumpToLast,
             ),
             Command::new(
@@ -171,25 +177,25 @@ impl CommandRegistry {
                 CommandAction::SearchChar,
             ),
         ];
-        
+
         Self { commands }
     }
-    
+
     /// Find a command that matches the given key event
     pub fn find_command(&self, key: &KeyEvent) -> Option<&Command> {
         self.commands.iter().find(|cmd| cmd.key_binding.matches(key))
     }
-    
+
     /// Get all commands for display in help
     pub fn get_display_commands(&self) -> Vec<(String, &str)> {
         let mut display_commands = Vec::new();
-        
+
         // Group some commands for better display
         display_commands.push(("Up/Down".to_string(), "Navigate list"));
         display_commands.push(("Left/Right".to_string(), "Navigate directories"));
         display_commands.push(("Home/End".to_string(), "Jump to first/last item"));
         display_commands.push(("PgUp/PgDn".to_string(), "Jump by 10 items"));
-        
+
         // Add individual commands that don't need grouping
         for cmd in &self.commands {
             match &cmd.action {
@@ -205,7 +211,7 @@ impl CommandRegistry {
                 }
             }
         }
-        
+
         display_commands
     }
-} 
+}

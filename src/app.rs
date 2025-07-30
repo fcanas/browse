@@ -1,11 +1,12 @@
 use crate::browser::{DirColumn, Browser};
 use crate::commands::{CommandRegistry, CommandAction};
 use crate::config::{Settings, load_settings};
+use crate::error::ErrorLog;
 use crate::file_operations::{FileDetails};
 use crate::ui::render_ui;
 use crate::settings::{SettingsManager, SettingsState};
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 
 
@@ -20,6 +21,7 @@ pub enum Preview {
 pub struct App {
     browser: Browser,
     settings_manager: SettingsManager,
+    error_log: ErrorLog,
     config: Settings,
     should_quit: bool,
     command_registry: CommandRegistry,
@@ -34,15 +36,19 @@ impl App {
         let config = load_settings()
             .map_err(|e| color_eyre::eyre::eyre!("Failed to load settings: {}", e))?;
 
-        let browser = Browser::new(current_dir, &config)?;
+        let mut error_log = ErrorLog::new();
+        let browser = Browser::new_with_error_log(current_dir, &config, Some(&mut error_log))?;
 
-        Ok(Self {
+        let app = Self {
             browser,
             settings_manager: SettingsManager::new(),
+            error_log,
             config,
             should_quit: false,
             command_registry: CommandRegistry::new(),
-        })
+        };
+
+        Ok(app)
     }
 
     /// Check if the application should quit
@@ -80,6 +86,41 @@ impl App {
             return Ok(());
         }
 
+        // Handle error log navigation if visible
+        if self.error_log.is_visible() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    self.error_log.hide();
+                    return Ok(());
+                }
+                KeyCode::Up => {
+                    self.error_log.select_previous();
+                    return Ok(());
+                }
+                KeyCode::Down => {
+                    self.error_log.select_next();
+                    return Ok(());
+                }
+                KeyCode::Home => {
+                    self.error_log.select_first();
+                    return Ok(());
+                }
+                KeyCode::End => {
+                    self.error_log.select_last();
+                    return Ok(());
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.error_log.clear();
+                    return Ok(());
+                }
+                KeyCode::Enter => {
+                    self.error_log.toggle_selected_wrap();
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+
         // Find matching command
         if let Some(command) = self.command_registry.find_command(&key) {
             let action = command.action.clone();
@@ -97,6 +138,9 @@ impl App {
             }
             CommandAction::ShowSettings => {
                 self.settings_manager.open();
+            }
+            CommandAction::ShowErrorLog => {
+                self.error_log.toggle_visibility();
             }
             CommandAction::ClearSearch => {
                 self.browser.clear_search();
@@ -143,4 +187,10 @@ impl App {
     pub fn settings(&self) -> &Option<SettingsState> {
         self.settings_manager.state()
     }
+
+    pub fn error_log(&self) -> &ErrorLog {
+        &self.error_log
+    }
+
+
 }
