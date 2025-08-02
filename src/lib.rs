@@ -8,6 +8,7 @@ pub mod file_preview;
 pub mod ui;
 pub mod utils;
 pub mod settings;
+pub mod tabs;
 
 pub use app::App;
 pub use config::{Settings, FileTypeRule, MimeTypeConfig};

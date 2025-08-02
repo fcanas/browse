@@ -11,6 +11,7 @@ mod error;
 mod file_operations;
 mod file_preview;
 mod settings;
+mod tabs;
 mod ui;
 mod utils;
 

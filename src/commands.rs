@@ -86,6 +86,10 @@ pub enum CommandAction {
     SetAnchor,
     SearchChar,
     ShowErrorLog,
+    NewTab,
+    CloseTab,
+    NextTab,
+    PrevTab,
 }
 
 impl Command {
@@ -125,6 +129,26 @@ impl CommandRegistry {
                 KeyBinding::key(KeyCode::Esc),
                 "Clear search string",
                 CommandAction::ClearSearch,
+            ),
+            Command::new(
+                KeyBinding::ctrl('t'),
+                "New tab",
+                CommandAction::NewTab,
+            ),
+            Command::new(
+                KeyBinding::ctrl('w'),
+                "Close current tab",
+                CommandAction::CloseTab,
+            ),
+            Command::new(
+                KeyBinding::char('}'),
+                "Next tab",
+                CommandAction::NextTab,
+            ),
+            Command::new(
+                KeyBinding::char('{'),
+                "Previous tab",
+                CommandAction::PrevTab,
             ),
             Command::new(
                 KeyBinding::key(KeyCode::Up),
@@ -196,13 +220,20 @@ impl CommandRegistry {
         display_commands.push(("Home/End".to_string(), "Jump to first/last item"));
         display_commands.push(("PgUp/PgDn".to_string(), "Jump by 10 items"));
 
+        // Add tab commands
+        display_commands.push(("Ctrl+T".to_string(), "New tab"));
+        display_commands.push(("Ctrl+W".to_string(), "Close tab"));
+        display_commands.push(("}/{".to_string(), "Next/Previous tab"));
+
         // Add individual commands that don't need grouping
         for cmd in &self.commands {
             match &cmd.action {
                 CommandAction::NavigateUp | CommandAction::NavigateDown |
                 CommandAction::NavigateLeft | CommandAction::NavigateRight |
                 CommandAction::JumpToFirst | CommandAction::JumpToLast |
-                CommandAction::JumpUpBy10 | CommandAction::JumpDownBy10 => {
+                CommandAction::JumpUpBy10 | CommandAction::JumpDownBy10 |
+                CommandAction::NewTab | CommandAction::CloseTab |
+                CommandAction::NextTab | CommandAction::PrevTab => {
                     // Skip these as they're already grouped above
                     continue;
                 }

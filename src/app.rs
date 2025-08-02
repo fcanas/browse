@@ -3,6 +3,7 @@ use crate::commands::{CommandRegistry, CommandAction};
 use crate::config::{Settings, load_settings};
 use crate::error::ErrorLog;
 use crate::file_operations::{FileDetails};
+use crate::tabs::TabManager;
 use crate::ui::render_ui;
 use crate::settings::{SettingsManager, SettingsState};
 use color_eyre::Result;
@@ -19,7 +20,7 @@ pub enum Preview {
 
 /// Main application state
 pub struct App {
-    browser: Browser,
+    tab_manager: TabManager,
     settings_manager: SettingsManager,
     error_log: ErrorLog,
     config: Settings,
@@ -37,10 +38,10 @@ impl App {
             .map_err(|e| color_eyre::eyre::eyre!("Failed to load settings: {}", e))?;
 
         let mut error_log = ErrorLog::new();
-        let browser = Browser::new_with_error_log(current_dir, &config, Some(&mut error_log))?;
+        let tab_manager = TabManager::new(current_dir, &config, Some(&mut error_log))?;
 
         let app = Self {
-            browser,
+            tab_manager,
             settings_manager: SettingsManager::new(),
             error_log,
             config,
@@ -81,7 +82,7 @@ impl App {
         if self.settings_manager.is_open() {
             let needs_reload = self.settings_manager.handle_key(key, &mut self.config)?;
             if needs_reload {
-                let _ = self.browser.reload_all_columns(&self.config);
+                self.tab_manager.reload_all_tabs(&self.config);
             }
             return Ok(());
         }
@@ -142,35 +143,62 @@ impl App {
             CommandAction::ShowErrorLog => {
                 self.error_log.toggle_visibility();
             }
+            CommandAction::NewTab => {
+                self.tab_manager.create_tab(&self.config, Some(&mut self.error_log))?;
+            }
+            CommandAction::CloseTab => {
+                if !self.tab_manager.close_current_tab() {
+                    // Cannot close the last tab - add a message to error log
+                    self.error_log.warning("Cannot close the last tab".to_string(), None);
+                }
+            }
+            CommandAction::NextTab => {
+                self.tab_manager.next_tab();
+            }
+            CommandAction::PrevTab => {
+                self.tab_manager.prev_tab();
+            }
             CommandAction::ClearSearch => {
-                self.browser.clear_search();
+                self.tab_manager.active_tab_mut().browser.clear_search();
             }
             CommandAction::NavigateUp => {
-                self.browser.select_previous();
-                self.browser.update_preview(&self.config)?;
+                let active_tab = self.tab_manager.active_tab_mut();
+                active_tab.browser.select_previous();
+                active_tab.browser.update_preview(&self.config)?;
             }
             CommandAction::NavigateDown => {
-                self.browser.select_next();
-                self.browser.update_preview(&self.config)?;
+                let active_tab = self.tab_manager.active_tab_mut();
+                active_tab.browser.select_next();
+                active_tab.browser.update_preview(&self.config)?;
             }
-            CommandAction::NavigateLeft => self.browser.navigate_left(&self.config)?,
-            CommandAction::NavigateRight => self.browser.navigate_right(&self.config)?,
-            CommandAction::SetAnchor => self.browser.set_anchor(&self.config)?,
+            CommandAction::NavigateLeft => {
+                let active_tab = self.tab_manager.active_tab_mut();
+                active_tab.browser.navigate_left(&self.config)?;
+                self.tab_manager.update_active_tab_name();
+            }
+            CommandAction::NavigateRight => {
+                let active_tab = self.tab_manager.active_tab_mut();
+                active_tab.browser.navigate_right(&self.config)?;
+                self.tab_manager.update_active_tab_name();
+            }
+            CommandAction::SetAnchor => {
+                self.tab_manager.active_tab_mut().browser.set_anchor(&self.config)?;
+            }
             CommandAction::JumpToFirst => {
-                self.browser.jump_to_first(&self.config)?;
+                self.tab_manager.active_tab_mut().browser.jump_to_first(&self.config)?;
             }
             CommandAction::JumpToLast => {
-                self.browser.jump_to_last(&self.config)?;
+                self.tab_manager.active_tab_mut().browser.jump_to_last(&self.config)?;
             }
             CommandAction::JumpUpBy10 => {
-                self.browser.jump_up_by_10(&self.config)?;
+                self.tab_manager.active_tab_mut().browser.jump_up_by_10(&self.config)?;
             }
             CommandAction::JumpDownBy10 => {
-                self.browser.jump_down_by_10(&self.config)?;
+                self.tab_manager.active_tab_mut().browser.jump_down_by_10(&self.config)?;
             }
             CommandAction::SearchChar => {
                 if let KeyCode::Char(c) = key.code {
-                    self.browser.handle_search_char(c)?;
+                    self.tab_manager.active_tab_mut().browser.handle_search_char(c)?;
                 }
             }
         }
@@ -181,7 +209,11 @@ impl App {
 
     // Getter methods for UI rendering
     pub fn browser(&self) -> &Browser {
-        &self.browser
+        &self.tab_manager.active_tab().browser
+    }
+
+    pub fn tab_manager(&self) -> &TabManager {
+        &self.tab_manager
     }
 
     pub fn settings(&self) -> &Option<SettingsState> {
