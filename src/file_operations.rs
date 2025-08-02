@@ -19,6 +19,7 @@ pub struct FileDetails {
     pub size: u64,
     pub created: Option<DateTime<Local>>,
     pub modified: Option<DateTime<Local>>,
+    pub permissions: String,
     pub symlink_target: Option<PathBuf>,
     pub content_preview: String,
     pub mime_type: Option<String>,
@@ -31,6 +32,7 @@ impl FileDetails {
 
         let created = metadata.created().ok().map(DateTime::from);
         let modified = metadata.modified().ok().map(DateTime::from);
+        let permissions = crate::utils::format_permissions(metadata.permissions().mode());
 
         let symlink_target = if metadata.file_type().is_symlink() {
             fs::read_link(path).ok()
@@ -56,6 +58,7 @@ impl FileDetails {
             size: metadata.len(),
             created,
             modified,
+            permissions,
             symlink_target,
             content_preview,
             mime_type,

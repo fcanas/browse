@@ -432,6 +432,11 @@ fn render_dir_column(
     _is_preview: bool,
     config: &Settings,
 ) {
+    use crate::utils::get_path_info;
+    use ratatui::layout::{Constraint, Layout, Direction};
+    use ratatui::widgets::{Paragraph, Wrap};
+    use ratatui::style::{Color, Style, Modifier};
+
     let title = column
         .path
         .file_name()
@@ -447,7 +452,16 @@ fn render_dir_column(
         Style::default()
     };
 
-    let max_filename_width = filename_width(area, config.show_icons);
+    // Split the area: main list + info footer (2 lines)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(3),    // Main list area
+            Constraint::Length(2), // Info footer
+        ])
+        .split(area);
+
+    let max_filename_width = filename_width(chunks[0], config.show_icons);
 
     let items: Vec<ListItem> = column
         .entries
@@ -468,7 +482,7 @@ fn render_dir_column(
     let list = List::new(items)
         .block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
                 .title(truncated_title)
                 .border_style(border_style)
                 .padding(Padding::uniform(1)),
@@ -480,5 +494,25 @@ fn render_dir_column(
 
     // Create a mutable state for rendering
     let mut list_state = column.selected.clone();
-    frame.render_stateful_widget(list, area, &mut list_state);
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
+
+    // Render directory info at the bottom
+    let entry_count = column.entries.len();
+    let info_text = if let Some((permissions, date)) = get_path_info(&column.path) {
+        format!("{} {} ({} items)", permissions, date, entry_count)
+    } else {
+        format!("--------- ???? ({} items)", entry_count)
+    };
+
+    let info_paragraph = Paragraph::new(info_text)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
+                .border_style(border_style)
+                .padding(Padding::horizontal(1)),
+        )
+        .style(Style::default().fg(Color::DarkGray))
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(info_paragraph, chunks[1]);
 }

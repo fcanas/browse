@@ -22,10 +22,16 @@ pub fn render_file_preview(frame: &mut Frame, details: &FileDetails, area: Rect)
     let truncated_title = truncate_text(&title, content_width(area));
 
     // Metadata section
-    let mut lines = vec![Line::from(vec![
-        Span::styled("Size: ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format_file_size(details.size)),
-    ])];
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Size: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format_file_size(details.size)),
+        ]),
+        Line::from(vec![
+            Span::styled("Permissions: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(details.permissions.clone()),
+        ]),
+    ];
 
     if let Some(created) = details.created {
         lines.push(Line::from(vec![
