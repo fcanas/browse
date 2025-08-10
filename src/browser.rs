@@ -11,6 +11,7 @@ use std::fs::DirEntry;
 use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
+use std::cmp;
 
 use ratatui::{
     prelude::*,
@@ -30,6 +31,15 @@ impl DirColumn {
     /// Create a new directory column
     pub fn new(path: PathBuf, initial_selection: usize, config: &Settings) -> io::Result<Self> {
         Self::new_with_error_log(path, initial_selection, config, None)
+    }
+
+    pub fn scroll(&mut self, direction: ScrollDirection, view_height: usize) {
+        // TODO: ListState might not let us scroll such that the selected item becomes invisible.
+        // Not sure how that's working, but it leads to some unexpected scrolling behavior.
+        match direction {
+            ScrollDirection::Backward => *self.selected.offset_mut() = cmp::max(0, self.selected.offset().saturating_sub(1)),
+            ScrollDirection::Forward => *self.selected.offset_mut() = cmp::min(self.entries.len() - view_height, self.selected.offset().saturating_add(1)),
+        }
     }
 
     /// Create a new directory column with error logging
@@ -133,13 +143,18 @@ impl Browser {
             last_key_time: Instant::now(),
         };
 
-        browser.update_preview(config)?;
+        _ = browser.update_preview(config);
         Ok(browser)
     }
 
     /// Get reference to columns
     pub fn columns(&self) -> &VecDeque<DirColumn> {
         &self.columns
+    }
+
+    /// Get mutable reference to columns
+    pub fn columns_mut(&mut self) -> &mut VecDeque<DirColumn> {
+        &mut self.columns
     }
 
     /// Get reference to preview
@@ -157,8 +172,27 @@ impl Browser {
         self.columns.back().expect("At least one column should always exist")
     }
 
+    pub fn activate_column(&mut self, index: usize, config: &Settings) -> Result<(),()> {
+
+        if index > self.columns.len() {
+            return Err(());
+        }
+
+        if index == self.columns.len() {
+            return self.navigate_right(config);
+        }
+
+        while (index + 1) < self.columns.len() {
+            if let Err(x) = self.navigate_left(config) {
+                return Err(x);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Navigate left (parent directory)
-    pub fn navigate_left(&mut self, config: &Settings) -> Result<()> {
+    pub fn navigate_left(&mut self, config: &Settings) -> Result<(), ()> {
         if self.columns.is_empty() {
             return Ok(());
         }
@@ -180,25 +214,30 @@ impl Browser {
                 let current_name = self.columns.back().unwrap().path.file_name();
 
                 // Find the index of the current directory in the parent
-                let initial_selection = if let Some(name) = current_name {
-                    let parent_column = DirColumn::new(parent_path.clone(), 0, config)?;
+                let initial_selection = if let Some(name) = current_name
+                   && let Ok(parent_column) = DirColumn::new(parent_path.clone(), 0, config)
+                    {
                     parent_column.entries.iter().position(|entry| entry.file_name() == name).unwrap_or(0)
                 } else {
                     0
                 };
 
-                let parent_column = DirColumn::new(parent_path, initial_selection, config)?;
+                let parent_column = DirColumn::new(parent_path, initial_selection, config);
                 self.columns.clear();
-                self.columns.push_back(parent_column);
+                match parent_column {
+                    Ok(column) => self.columns.push_back(column),
+                    Err(_) => {
+                        return Err(());
+                    }
+                }
             }
         }
 
-        self.update_preview(config)?;
-        Ok(())
+        return self.update_preview(config);
     }
 
     /// Navigate right (enter directory)
-    pub fn navigate_right(&mut self, config: &Settings) -> Result<()> {
+    pub fn navigate_right(&mut self, config: &Settings) -> Result<(), ()> {
         if let Some(entry) = self.active_column().selected_entry() {
             let path = entry.path();
 
@@ -219,11 +258,11 @@ impl Browser {
                         }
 
                         self.columns.push_back(new_column);
-                        self.update_preview(config)?;
+                        return self.update_preview(config);
                     }
                     Err(_) => {
                         // Directory might be inaccessible, just update preview
-                        self.update_preview(config)?;
+                        return self.update_preview(config);
                     }
                 }
             }
@@ -240,7 +279,7 @@ impl Browser {
             self.columns.clear();
             let new_column = DirColumn::new(path, selection, config)?;
             self.columns.push_back(new_column);
-            self.update_preview(config)?;
+            _ = self.update_preview(config);
         }
         Ok(())
     }
@@ -286,7 +325,7 @@ impl Browser {
     }
 
     /// Update the preview panel
-    pub fn update_preview(&mut self, config: &Settings) -> Result<()> {
+    pub fn update_preview(&mut self, config: &Settings) -> Result<(),()> {
         self.preview = if let Some(entry) = self.active_column().selected_entry() {
             let path = entry.path();
 
@@ -319,7 +358,7 @@ impl Browser {
         for column in &mut self.columns {
             let _ = column.reload(config);
         }
-        self.update_preview(config)?;
+        _ = self.update_preview(config);
         Ok(())
     }
 
@@ -328,7 +367,7 @@ impl Browser {
         if let Some(column) = self.columns.back_mut() {
             if !column.entries.is_empty() {
                 column.selected.select(Some(0));
-                self.update_preview(config)?;
+                _ = self.update_preview(config);
             }
         }
         Ok(())
@@ -339,7 +378,7 @@ impl Browser {
         if let Some(column) = self.columns.back_mut() {
             if !column.entries.is_empty() {
                 column.selected.select(Some(column.entries.len() - 1));
-                self.update_preview(config)?;
+                _ = self.update_preview(config);
             }
         }
         Ok(())
@@ -351,7 +390,7 @@ impl Browser {
             if let Some(current) = column.selected.selected() {
                 let new_index = current.saturating_sub(10);
                 column.selected.select(Some(new_index));
-                self.update_preview(config)?;
+                _ = self.update_preview(config);
             }
         }
         Ok(())
@@ -363,7 +402,7 @@ impl Browser {
             if let Some(current) = column.selected.selected() {
                 let new_index = (current + 10).min(column.entries.len().saturating_sub(1));
                 column.selected.select(Some(new_index));
-                self.update_preview(config)?;
+                _ = self.update_preview(config);
             }
         }
         Ok(())

@@ -1,4 +1,4 @@
-use crate::app::{App};
+use crate::app::{App, LayoutInfo};
 use crate::browser::{render_browser};
 use crate::error::render_error_log;
 use crate::utils::{truncate_text};
@@ -9,7 +9,53 @@ use ratatui::{
 };
 
 /// Main UI rendering function
-pub fn render_ui(frame: &mut Frame, app: &mut App) {
+pub fn render_ui(frame: &mut Frame, app: &mut App) -> LayoutInfo {
+    let layout_info = calculate_layout_info(frame.area(), app);
+    render_ui_with_layout(frame, app, &layout_info);
+    layout_info
+}
+
+/// Calculate layout information for mouse interactions
+fn calculate_layout_info(area: Rect, app: &App) -> LayoutInfo {
+    let mut layout_info = LayoutInfo::default();
+    // Create layout with tabs at the top
+    let main_layout = if app.error_log().is_visible() {
+        Layout::vertical([
+            Constraint::Length(1),   // Tab bar
+            Constraint::Min(0),      // Browser content
+            Constraint::Length(8),   // Error log panel (8 lines)
+            Constraint::Length(1),   // Status bar
+        ]).split(area)
+    } else {
+        Layout::vertical([
+            Constraint::Length(1),   // Tab bar
+            Constraint::Min(0),      // Browser content
+            Constraint::Length(1),   // Status bar
+        ]).split(area)
+    };
+
+    layout_info.tab_area = main_layout[0];
+    layout_info.browser_area = main_layout[1];
+
+    // Calculate browser column areas
+    let browser = app.browser();
+    let num_cols = browser.columns().len() + if browser.preview().is_some() { 1 } else { 0 };
+    let constraints = (0..num_cols)
+        .map(|_| Constraint::Ratio(1, num_cols as u32))
+        .collect::<Vec<_>>();
+    layout_info.column_areas = Layout::horizontal(constraints).split(main_layout[1]).to_vec();
+
+    if app.error_log().is_visible() {
+        layout_info.status_area = main_layout[3];
+    } else {
+        layout_info.status_area = main_layout[2];
+    }
+
+    layout_info
+}
+
+/// Render UI with pre-calculated layout info
+fn render_ui_with_layout(frame: &mut Frame, app: &mut App, _layout_info: &LayoutInfo) {
     // Create layout with tabs at the top
     let main_layout = if app.error_log().is_visible() {
         Layout::vertical([
@@ -42,7 +88,6 @@ pub fn render_ui(frame: &mut Frame, app: &mut App) {
         render_status_bar(frame, app, main_layout[2]);
     }
 }
-
 
 /// Render tab bar showing all open tabs
 fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {

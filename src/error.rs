@@ -125,7 +125,6 @@ impl ErrorLog {
         self.add_entry(ErrorEntry::warning(message, context));
     }
 
-    #[allow(dead_code)]
     pub fn info(&mut self, message: String, context: Option<String>) {
         self.add_entry(ErrorEntry::info(message, context));
     }

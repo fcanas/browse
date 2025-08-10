@@ -1,6 +1,8 @@
 use color_eyre::Result;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, EnableMouseCapture, DisableMouseCapture};
+use crossterm::execute;
 use ratatui::DefaultTerminal;
+use std::io::stdout;
 use std::time::Duration;
 
 mod app;
@@ -20,6 +22,10 @@ use config::{save_settings, DEFAULT_POLL_INTERVAL_MS};
 
 fn main() -> Result<()> {
     color_eyre::install()?;
+
+    // Enable mouse capture
+    execute!(stdout(), EnableMouseCapture)?;
+
     let mut terminal = ratatui::init();
     let mut app = App::new()?;
 
@@ -30,6 +36,8 @@ fn main() -> Result<()> {
         eprintln!("Warning: Failed to save settings: {}", e);
     }
 
+    // Disable mouse capture and restore terminal
+    execute!(stdout(), DisableMouseCapture)?;
     ratatui::restore();
     result
 }
@@ -38,11 +46,24 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     let poll_duration = Duration::from_millis(DEFAULT_POLL_INTERVAL_MS);
 
     while !app.should_quit() {
-        terminal.draw(|f| app.render(f))?;
+        let mut layout_info = None;
+        terminal.draw(|f| {
+            layout_info = Some(app.render(f));
+        })?;
+
+        if let Some(info) = layout_info {
+            app.set_layout_info(info);
+        }
 
         if event::poll(poll_duration)? {
-            if let Event::Key(key) = event::read()? {
-                app.handle_key(key)?;
+            match event::read()? {
+                Event::Key(key) => {
+                    app.handle_key(key)?;
+                }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse)?;
+                }
+                _ => {}
             }
         }
     }

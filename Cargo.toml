@@ -1,7 +1,7 @@
 [package]
 name = "browse"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 ratatui = "0.29"
@@ -18,11 +18,11 @@ default = []
 
 # Optimize for release builds
 [profile.release]
-lto = true           # Link-time optimization
-codegen-units = 1    # Better optimization
-panic = "abort"      # Smaller binary size
-strip = true         # Remove debug symbols
+lto = true        # Link-time optimization
+codegen-units = 1 # Better optimization
+panic = "abort"   # Smaller binary size
+strip = true      # Remove debug symbols
 
 # Faster debug builds
 [profile.dev]
-opt-level = 1        # Some optimization for better performance during development 
+opt-level = 1 # Some optimization for better performance during development

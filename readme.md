@@ -6,6 +6,7 @@ A TUI file browser
 
 - Miller column navigation
 - File preview - primative, text-based
+- Mouse support for scrolling and selection
 
 ## Controls
 
