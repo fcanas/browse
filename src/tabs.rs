@@ -11,8 +11,6 @@ pub struct Tab {
     pub browser: Browser,
     /// Display name for the tab (usually the directory name)
     pub name: String,
-    /// The root path this tab was created with
-    pub root_path: PathBuf,
 }
 
 impl Tab {
@@ -29,7 +27,6 @@ impl Tab {
         Ok(Self {
             browser,
             name,
-            root_path: path,
         })
     }
 
