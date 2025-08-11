@@ -1,12 +1,15 @@
 # Browse
 
-A TUI file browser
+A TUI file browser.
+
+Experimental. You probably don't want to use this.
 
 ## Features
 
-- Miller column navigation
-- File preview - primative, text-based
-- Mouse support for scrolling and selection
+- [Miller column](https://en.wikipedia.org/wiki/Miller_columns) navigation
+- File information - primative preview of text-based files
+- Rudimentary mouse support
+- Tabs
 
 ## Controls
 
