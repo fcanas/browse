@@ -38,7 +38,7 @@ impl DirColumn {
         // Not sure how that's working, but it leads to some unexpected scrolling behavior.
         match direction {
             ScrollDirection::Backward => *self.selected.offset_mut() = cmp::max(0, self.selected.offset().saturating_sub(1)),
-            ScrollDirection::Forward => *self.selected.offset_mut() = cmp::min(self.entries.len() - view_height, self.selected.offset().saturating_add(1)),
+            ScrollDirection::Forward => *self.selected.offset_mut() = cmp::min(self.entries.len().saturating_sub(view_height), self.selected.offset().saturating_add(1)),
         }
     }
 
