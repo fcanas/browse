@@ -85,8 +85,6 @@ pub fn read_directory_with_error_log(path: &Path, config: &Settings, mut error_l
                 let error_msg = format!("Failed to read directory entry: {}", e);
                 if let Some(ref mut log) = error_log {
                     log.warning(error_msg, Some("Directory Reading".to_string()));
-                } else {
-                    eprintln!("Warning: {}", error_msg);
                 }
                 None
             }
@@ -111,9 +109,7 @@ pub fn read_directory_with_error_log(path: &Path, config: &Settings, mut error_l
         let warning_msg = format!("Directory has more than {} entries, showing first {}",
                                  MAX_DIRECTORY_ENTRIES, MAX_DIRECTORY_ENTRIES);
         if let Some(ref mut log) = error_log {
-            log.warning(warning_msg, Some(format!("Directory: {}", path.display())));
-        } else {
-            eprintln!("Warning: {}", warning_msg);
+            log.warning(warning_msg, Some("File Operation".to_string()));
         }
     }
 

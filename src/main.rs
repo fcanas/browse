@@ -31,14 +31,15 @@ fn main() -> Result<()> {
 
     let result = run(&mut terminal, &mut app);
 
+    // Disable mouse capture and restore terminal
+    execute!(stdout(), DisableMouseCapture)?;
+    ratatui::restore();
+
     // Save settings before exiting
     if let Err(e) = save_settings(&app.config()) {
         eprintln!("Warning: Failed to save settings: {}", e);
     }
 
-    // Disable mouse capture and restore terminal
-    execute!(stdout(), DisableMouseCapture)?;
-    ratatui::restore();
     result
 }
 
