@@ -474,7 +474,7 @@ fn render_dir_column(
     use crate::utils::get_path_info;
     use ratatui::layout::{Constraint, Layout, Direction};
     use ratatui::widgets::{Paragraph, Wrap};
-    use ratatui::style::{Color, Style, Modifier};
+    use ratatui::style::{Color, Style};
 
     let title = column
         .path
@@ -527,8 +527,12 @@ fn render_dir_column(
                 .padding(Padding::uniform(1)),
         )
         .highlight_style(
-            Style::default()
-                .add_modifier(if is_active { Modifier::REVERSED } else { Modifier::DIM })
+            if _is_preview {
+                Style::default()
+            } else {
+                Style::default()
+                    .bg(if is_active { Color::Cyan } else { Color::DarkGray })
+            }
         );
 
     // Create a mutable state for rendering
